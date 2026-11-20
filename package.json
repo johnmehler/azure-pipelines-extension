@@ -1,7 +1,8 @@
 {
   "name": "azure-devops-pipelines",
-  "displayName": "Azure DevOps Pipelines",
+  "displayName": "Pipelines Manager for Azure DevOps",
   "description": "Browse, run, and inspect Azure DevOps pipelines from VS Code.",
+  "icon": "media/icon.png",
   "version": "0.1.0",
   "publisher": "JohnMehler",
   "license": "MIT",
