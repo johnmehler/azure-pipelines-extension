@@ -7,13 +7,26 @@ const {
   getExpressionCompletions,
   getExpressionDiagnostics,
   getExpressionHover,
+  getAzureYamlCompletions,
+  getPipelineResourceDiagnostics,
+  getScheduleDiagnostics,
+  getScheduleInlayHints,
   getTemplateReferenceAt,
+  getTemplateParameterCompletions,
+  getTemplateParameterDiagnostics,
+  getTemplateParameterTemplateAt,
+  getTemplateReferences,
+  getTaskHover,
   getTaskInputCompletions,
   getTaskInputDiagnostics,
+  getTaskReferenceCompletions,
+  getTaskReferenceDiagnostics,
+  isTemplateParameterCompletionPosition,
   getParameterDefinitions,
   isAzurePipelineDocument,
   isTaskInputCompletionPosition,
   parameterPromptKind,
+  parseTemplateReference,
   resolveTemplatePaths,
   typedParameterValue
 } = require("../src/yamlSupport");
@@ -68,6 +81,25 @@ test("completes dependency outputs from named jobs and steps", () => {
   assert.ok(items.some(item => item.label === "SetVersion."));
 });
 
+test("completes declared task output variables", () => {
+  const source = [
+    "jobs:",
+    "- job: Build",
+    "  steps:",
+    "  - task: Publish@1",
+    "    name: publish",
+    "condition: ${{ eq(dependencies.Build.outputs['publish.Art }}"
+  ].join("\n");
+  const definitions = [{
+    name: "Publish",
+    version: {major: 1, minor: 0},
+    outputVariables: [{name: "ArtifactId"}, {name: "PackageName"}]
+  }];
+  const offset = source.indexOf("publish.Art") + "publish.Art".length;
+  assert.ok(getExpressionCompletions(source, offset, definitions)
+    .some(item => item.label === "publish.ArtifactId"));
+});
+
 test("diagnoses unclosed expressions and unknown expression functions", () => {
   const diagnostics = getExpressionDiagnostics("condition: ${{ madeUp() }}\nvariables:\n  x: ${{ eq(true, true) ");
   assert.equal(diagnostics.length, 2);
@@ -94,13 +126,17 @@ test("diagnostics ignore function-like string literals and recognize xor", () =>
 });
 
 test("parses nested expression calls and reports malformed arguments and indexes", () => {
-  const valid = "${{ and(eq(variables['Build.SourceBranch'], 'refs/heads/main'), not(failed())) }}";
   const templateDirectives = [
-    "${{ if eq(variables['Build.SourceBranch'], 'main') }}",
-    "${{ each pair in parameters.pairs }}",
-    "${{ insert }}"
+    "parameters:",
+    "- name: pairs",
+    "  type: object",
+    "variables:",
+    "  nested: \"${{ and(eq(variables['Build.SourceBranch'], 'refs/heads/main'), not(failed())) }}\"",
+    "  conditional: \"${{ if eq(variables['Build.SourceBranch'], 'main') }}\"",
+    "  loop: \"${{ each pair in parameters.pairs }}\"",
+    "  insert: \"${{ insert }}\""
   ].join("\n");
-  assert.deepEqual(getExpressionDiagnostics(`${valid}\n${templateDirectives}`), []);
+  assert.deepEqual(getExpressionDiagnostics(templateDirectives), []);
 
   const malformed = getExpressionDiagnostics("${{ eq(true, ) }} ${{ variables['x' }}");
   assert.equal(malformed.length, 2);
@@ -220,4 +256,113 @@ test("validates unknown, invalid, and missing task inputs", () => {
   assert.match(diagnostics[0].message, /Invalid value/);
   assert.match(diagnostics[1].message, /Unknown input/);
   assert.match(diagnostics[2].message, /Required task input "script"/);
+});
+
+test("completes, documents, and validates task name and major-version references", () => {
+  const definitions = [
+    {name: "Bash", friendlyName: "Bash", version: {major: 3, minor: 2}, description: "Runs scripts."},
+    {name: "Bash", version: {major: 4, minor: 1}},
+    {name: "CopyFiles", version: {major: 2, minor: 0}}
+  ];
+  const source = "steps:\n- task: Bash@3";
+  assert.deepEqual(
+    getTaskReferenceCompletions("steps:\n- task: ", 15, definitions).map(item => item.label),
+    ["Bash@4", "Bash@3", "CopyFiles@2"]
+  );
+  assert.equal(getTaskHover(source, source.indexOf("Bash") + 1, definitions).title, "Bash@3");
+  const unknown = "steps:\n- task: Bash@9";
+  assert.match(getTaskReferenceDiagnostics(unknown, definitions)[0].message, /available major versions: 3, 4/);
+  assert.equal(getTaskReferenceDiagnostics(source, definitions).length, 0);
+});
+
+test("completes and validates template parameters from the referenced template", () => {
+  const source = [
+    "steps:",
+    "- template: templates/build.yml@shared",
+    "  parameters:",
+    "    mode: rel"
+  ].join("\n");
+  const template = [
+    "parameters:",
+    "- name: mode",
+    "  type: string",
+    "  values: [debug, release]",
+    "- name: target",
+    "  type: string"
+  ].join("\n");
+  const completionSource = [
+    "steps:",
+    "- template: templates/build.yml@shared",
+    "  parameters:",
+    "    mo"
+  ].join("\n");
+  const offset = completionSource.length;
+  assert.equal(isTemplateParameterCompletionPosition(completionSource, offset), true);
+  assert.equal(getTemplateParameterTemplateAt(completionSource, offset), "templates/build.yml@shared");
+  assert.equal(parseTemplateReference("templates/build.yml@shared").repository, "shared");
+  assert.equal(getTemplateReferences(source)[0].path, "templates/build.yml@shared");
+  assert.deepEqual(
+    getTemplateParameterCompletions(completionSource, offset, template).map(item => item.label),
+    ["mode"]
+  );
+  const diagnostics = getTemplateParameterDiagnostics(source, template);
+  assert.equal(diagnostics.length, 2);
+  assert.match(diagnostics[0].message, /Invalid value/);
+  assert.match(diagnostics[1].message, /Required template parameter "target"/);
+});
+
+test("validates cron schedules and provides UTC schedule hints", () => {
+  const source = [
+    "schedules:",
+    "- cron: '0 3 * * 1-5'",
+    "  displayName: Weekday build",
+    "  branches:",
+    "    include: [main]"
+  ].join("\n");
+  assert.deepEqual(getScheduleDiagnostics(source), []);
+  assert.equal(getScheduleInlayHints(source)[0].label, "Weekdays at 03:00 UTC");
+  const invalid = "schedules:\n- cron: '90 25 * * *'";
+  assert.match(getScheduleDiagnostics(invalid)[0].message, /out of range/);
+});
+
+test("completes and validates Azure agent pools and environments", () => {
+  const poolSource = "jobs:\n- job: build\n  pool:\n    name: ";
+  assert.deepEqual(
+    getAzureYamlCompletions(poolSource, poolSource.length, {
+      agentPools: [{name: "Linux"}]
+    }).map(item => item.label),
+    ["Linux"]
+  );
+  const environmentSource = "jobs:\n- deployment: deploy\n  environment: ";
+  assert.deepEqual(
+    getAzureYamlCompletions(environmentSource, environmentSource.length, {
+      environments: [{name: "Production"}]
+    }).map(item => item.label),
+    ["Production"]
+  );
+  const diagnostics = getPipelineResourceDiagnostics([
+    "jobs:",
+    "- deployment: deploy",
+    "  environment: Missing",
+    "  pool:",
+    "    name: MissingPool",
+    "    vmImage: made-up"
+  ].join("\n"), {
+    environments: ["Production"],
+    agentPools: ["Linux"]
+  });
+  assert.equal(diagnostics.length, 3);
+});
+
+test("reports function arity and statically invalid parameter references", () => {
+  const text = [
+    "parameters:",
+    "- name: configuration",
+    "  type: string",
+    "condition: ${{ and(eq(true), eq(parameters.unknown, 'x'), succeeded(true)) }}"
+  ].join("\n");
+  const messages = getExpressionDiagnostics(text).map(item => item.message);
+  assert.ok(messages.some(message => /eq.*expects 2 arguments/.test(message)));
+  assert.ok(messages.some(message => /Unknown pipeline parameter "unknown"/.test(message)));
+  assert.ok(messages.some(message => /succeeded.*expects 0 arguments/.test(message)));
 });

@@ -26,6 +26,13 @@ test("Azure DevOps SSH and legacy visualstudio.com remotes are recognized", () =
   );
 });
 
+test("Azure DevOps Server collection remotes are recognized", () => {
+  assert.deepEqual(
+    parseAzureDevOpsRemote("https://ado.example.test/tfs/DefaultCollection/Build/_git/agent"),
+    {organization: "DefaultCollection", project: "Build", repository: "agent"}
+  );
+});
+
 test("unrelated remotes are ignored and duplicate projects are collapsed", () => {
   const remotes = parseGitRemotes([
     "origin https://dev.azure.com/contoso/Platform/_git/web-app (fetch)",

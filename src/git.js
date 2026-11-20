@@ -43,6 +43,13 @@ function parseAzureDevOpsRemote(remote) {
     if (path[collectionIndex + 1]?.toLowerCase() === "_git") {
       repository = path[collectionIndex + 2];
     }
+  } else {
+    const gitIndex = path.findIndex(segment => segment.toLowerCase() === "_git");
+    if (gitIndex >= 2 && path[gitIndex + 1]) {
+      organization = path[gitIndex - 2];
+      project = path[gitIndex - 1];
+      repository = path[gitIndex + 1];
+    }
   }
 
   if (!organization || !project) {

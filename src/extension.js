@@ -15,12 +15,26 @@ const {
   getExpressionCompletions,
   getExpressionDiagnostics,
   getExpressionHover,
+  getAzureYamlCompletions,
+  getPipelineResourceDiagnostics,
+  getScheduleDiagnostics,
+  getScheduleInlayHints,
+  getTaskHover,
+  getTaskReferenceCompletions,
+  getTaskReferenceDiagnostics,
+  getTemplateParameterCompletions,
+  getTemplateParameterDiagnostics,
+  getTemplateParameterTemplateAt,
   getTemplateReferenceAt,
+  getTemplateReferences,
   getTaskInputCompletions,
   getTaskInputDiagnostics,
   getParameterDefinitions,
   isAzurePipelineDocument,
   isTaskInputCompletionPosition,
+  isTemplateParameterCompletionPosition,
+  parsePipelineYaml,
+  parseTemplateReference,
   parameterPromptKind,
   resolveTemplatePaths,
   typedParameterValue
@@ -96,14 +110,29 @@ async function currentGitBranch(folder) {
 
 function activate(context) {
   const secretStorage = context.secrets;
+  const remoteTemplateContents = new Map();
+  const remoteTemplateScheme = "azure-pipelines-template";
+  const remoteTemplateChanged = new vscode.EventEmitter();
+  context.subscriptions.push(remoteTemplateChanged);
+  context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider(
+    remoteTemplateScheme,
+    {
+      onDidChange: remoteTemplateChanged.event,
+      provideTextDocumentContent(uri) {
+        return remoteTemplateContents.get(uri.query) || "";
+      }
+    }
+  ));
   const readConnectionValues = async folder => {
     const settings = vscode.workspace.getConfiguration(
       "azure-pipelines",
       folder?.uri
     );
+    const serverUrl = settings.get("serverUrl", "").trim();
     const authMethod = settings.get("authMethod", "pat");
+    const useMicrosoftAuth = authMethod === "microsoft" && !serverUrl;
     let token;
-    if (authMethod === "microsoft") {
+    if (useMicrosoftAuth) {
       try {
         const session = await vscode.authentication.getSession(
           "microsoft",
@@ -131,11 +160,13 @@ function activate(context) {
     return {
       organization,
       project,
+      serverUrl: serverUrl || undefined,
+      apiVersion: settings.get("apiVersion", "7.1"),
       repository,
       workspaceFolder: folder,
       token,
       authMethod,
-      authType: authMethod === "microsoft" ? "bearer" : "pat"
+      authType: useMicrosoftAuth ? "bearer" : "pat"
     };
   };
 
@@ -177,15 +208,16 @@ function activate(context) {
     const settings = vscode.workspace.getConfiguration("azure-pipelines");
     const configuredOrganization = settings.get("organization", "").trim();
     const configuredProject = settings.get("project", "").trim();
-    if (configuredOrganization && configuredProject) {
+    const configuredServerUrl = settings.get("serverUrl", "").trim();
+    if ((configuredOrganization || configuredServerUrl) && configuredProject) {
       return readConnectionValues(undefined);
     }
 
     const detected = await Promise.all(folders.map(readConnectionValues));
     const unique = new Map(detected
-      .filter(values => values.organization && values.project)
+      .filter(values => (values.organization || values.serverUrl) && values.project)
       .map(values => [
-        `${values.organization.toLowerCase()}/${values.project.toLowerCase()}`,
+        `${(values.serverUrl || values.organization).toLowerCase()}/${values.project.toLowerCase()}`,
         values
       ]));
     return unique.size === 1 ? unique.values().next().value : readConnectionValues(undefined);
@@ -213,13 +245,51 @@ function activate(context) {
         targetFolder = folders[0];
       }
       const values = await getConnectionValues(targetFolder);
-      const organization = await vscode.window.showInputBox({
+      const targetType = await vscode.window.showQuickPick([
+        {label: "Azure DevOps Services", value: "services"},
+        {label: "Azure DevOps Server", value: "server"}
+      ], {placeHolder: "Choose Azure DevOps Services or an on-premises server"});
+      if (!targetType) {
+        return false;
+      }
+      const serverUrl = targetType.value === "server"
+        ? await vscode.window.showInputBox({
+            title: "Azure DevOps Server connection",
+            prompt: "Collection URL, for example https://ado.example.com/tfs/DefaultCollection",
+            value: values.serverUrl || "",
+            ignoreFocusOut: true,
+            validateInput(value) {
+              try {
+                const url = new URL(value);
+                return url.protocol === "https:" &&
+                  !url.username &&
+                  !url.password &&
+                  !url.search &&
+                  !url.hash
+                  ? undefined
+                  : "Use an HTTPS collection URL without credentials, query, or fragment.";
+              } catch {
+                return "Enter a valid collection URL.";
+              }
+            }
+          })
+        : "";
+      if (serverUrl === undefined) {
+        return false;
+      }
+      const organizationValue = await vscode.window.showInputBox({
         title: "Azure DevOps connection",
-        prompt: "Organization name from https://dev.azure.com/{organization}",
+        prompt: targetType.value === "server"
+          ? "Optional collection label (the collection URL above is used for API requests)"
+          : "Organization name from https://dev.azure.com/{organization}",
         value: values.organization,
         ignoreFocusOut: true
       });
-      if (!organization?.trim()) {
+      if (organizationValue === undefined) {
+        return false;
+      }
+      const organization = organizationValue.trim() || (serverUrl ? "server" : "");
+      if (!organization) {
         return false;
       }
       const project = await vscode.window.showInputBox({
@@ -233,10 +303,15 @@ function activate(context) {
       if (!project?.trim()) {
         return false;
       }
-      const selectedAuth = await vscode.window.showQuickPick([
-        {label: "Microsoft account sign-in", description: "Recommended; token is managed by VS Code", value: "microsoft"},
-        {label: "Personal access token", description: "Stored in VS Code SecretStorage", value: "pat"}
-      ], {placeHolder: "Choose Azure DevOps authentication"});
+      const authOptions = targetType.value === "server"
+        ? [{label: "Personal access token", description: "Stored in VS Code SecretStorage", value: "pat"}]
+        : [
+            {label: "Microsoft account sign-in", description: "Recommended; token is managed by VS Code", value: "microsoft"},
+            {label: "Personal access token", description: "Stored in VS Code SecretStorage", value: "pat"}
+          ];
+      const selectedAuth = await vscode.window.showQuickPick(authOptions, {
+        placeHolder: "Choose Azure DevOps authentication"
+      });
       if (!selectedAuth) {
         return false;
       }
@@ -277,14 +352,15 @@ function activate(context) {
           ? vscode.ConfigurationTarget.Workspace
           : vscode.ConfigurationTarget.Global;
       const settings = vscode.workspace.getConfiguration("azure-pipelines", targetFolder?.uri);
-      await settings.update("organization", organization.trim(), target);
+      await settings.update("organization", organization, target);
       await settings.update("project", project.trim(), target);
+      await settings.update("serverUrl", serverUrl || "", target);
       await settings.update("authMethod", selectedAuth.value, target);
       if (selectedAuth.value === "pat") {
         await secretStorage.store(PAT_SECRET_KEY, token);
       }
       await vscode.window.showInformationMessage(
-        `Azure DevOps connection saved using ${selectedAuth.label}.`
+        `${targetType.label} connection saved using ${selectedAuth.label}.`
       );
       refreshAll();
       return targetFolder || true;
@@ -298,7 +374,7 @@ function activate(context) {
 
   const getApi = async (promptForSetup = false, folder) => {
     let values = await getConnectionValues(folder);
-    if ((!values.organization || !values.project || !values.token) && promptForSetup) {
+    if ((!values.organization && !values.serverUrl || !values.project || !values.token) && promptForSetup) {
       const answer = await vscode.window.showWarningMessage(
         "Configure an Azure DevOps organization, project, and authentication method to use pipeline features.",
         "Configure"
@@ -310,7 +386,7 @@ function activate(context) {
         );
       }
     }
-    if (!values.organization || !values.project || !values.token) {
+    if ((!values.organization && !values.serverUrl) || !values.project || !values.token) {
       return undefined;
     }
     return new AzureDevOpsApi(values);
@@ -443,8 +519,9 @@ function activate(context) {
   });
   const libraryProvider = new LibraryProvider({getApi, getWorkspaceFolders});
   let variableNamesCache = {expires: 0, names: []};
-  let taskCatalogCache = {organization: "", expires: 0, definitions: []};
+  let taskCatalogCache = {connection: "", expires: 0, definitions: []};
   let taskCatalogRequest;
+  const templateContentCache = new Map();
   context.subscriptions.push(libraryProvider.onDidChangeTreeData(() => {
     variableNamesCache.expires = 0;
   }));
@@ -467,24 +544,24 @@ function activate(context) {
       return [];
     }
   };
-  const getTaskDefinitions = async () => {
-    const organization = vscode.workspace.getConfiguration("azure-pipelines")
-      .get("organization", "").trim().toLowerCase();
-    if (!organization) {
+  const getTaskDefinitions = async folder => {
+    const values = await getConnectionValues(folder);
+    const connection = (values.serverUrl || values.organization || "").toLowerCase();
+    if (!connection) {
       return [];
     }
-    if (taskCatalogCache.organization === organization && taskCatalogCache.expires > Date.now()) {
+    if (taskCatalogCache.connection === connection && taskCatalogCache.expires > Date.now()) {
       return taskCatalogCache.definitions;
     }
-    if (taskCatalogRequest?.organization === organization) {
+    if (taskCatalogRequest?.connection === connection) {
       return taskCatalogRequest.promise;
     }
     const promise = (async () => {
       try {
-        const api = await getApi(false);
+        const api = await getApi(false, folder);
         if (!api) {
           taskCatalogCache = {
-            organization,
+            connection,
             expires: Date.now() + 60 * 1000,
             definitions: []
           };
@@ -492,21 +569,21 @@ function activate(context) {
         }
         const definitions = responseItems(await api.listTaskDefinitions(), "tasks");
         taskCatalogCache = {
-          organization,
+          connection,
           expires: Date.now() + 60 * 60 * 1000,
           definitions
         };
         return definitions;
       } catch {
         taskCatalogCache = {
-          organization,
+          connection,
           expires: Date.now() + 60 * 1000,
           definitions: []
         };
         return [];
       }
     })();
-    taskCatalogRequest = {organization, promise};
+    taskCatalogRequest = {connection, promise};
     try {
       return await promise;
     } finally {
@@ -514,6 +591,124 @@ function activate(context) {
         taskCatalogRequest = undefined;
       }
     }
+  };
+  let yamlCatalogCache = {connection: "", expires: 0, pools: [], environments: []};
+  const getYamlCatalogs = async folder => {
+    const values = await getConnectionValues(folder);
+    const connection = `${values.serverUrl || values.organization}/${values.project}`;
+    if (yamlCatalogCache.connection === connection && yamlCatalogCache.expires > Date.now()) {
+      return yamlCatalogCache;
+    }
+    const api = await getApi(false, folder);
+    if (!api) {
+      return {pools: [], environments: []};
+    }
+    const [poolResult, environmentResult] = await Promise.allSettled([
+      api.listAgentPools(),
+      api.listEnvironments()
+    ]);
+    const result = {
+      connection,
+      expires: Date.now() + 30_000,
+      pools: poolResult.status === "fulfilled"
+        ? responseItems(poolResult.value, "pool")
+        : [],
+      environments: environmentResult.status === "fulfilled"
+        ? responseItems(environmentResult.value, "environments")
+        : []
+    };
+    yamlCatalogCache = result;
+    return result;
+  };
+  const getTemplateText = async (document, referencePath) => {
+    const reference = parseTemplateReference(referencePath);
+    if (!reference) {
+      return undefined;
+    }
+    const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+    if (!reference.repository) {
+      const candidates = resolveTemplatePaths(
+        reference.path,
+        document.uri.fsPath,
+        folder?.uri.fsPath
+      );
+      for (const candidate of candidates) {
+        try {
+          const uri = vscode.Uri.file(candidate);
+          const content = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString("utf8");
+          return {content, uri};
+        } catch {
+          // Try the next supported path base.
+        }
+      }
+      return undefined;
+    }
+
+    const pipeline = parsePipelineYaml(document.getText()) || {};
+    const repositoryResource = (pipeline.resources?.repositories || []).find(repository =>
+      repository?.repository?.toLowerCase() === reference.repository.toLowerCase()
+    );
+    if (!repositoryResource?.name) {
+      return undefined;
+    }
+    const api = await getApi(false, folder);
+    if (!api) {
+      return undefined;
+    }
+    const requestedName = String(repositoryResource.name).toLowerCase();
+    const nameParts = requestedName.split("/");
+    const requestedLeaf = nameParts.pop();
+    const repositoryProject = nameParts.pop() || api.project;
+    const repositories = responseItems(
+      await api.listGitRepositories(repositoryProject),
+      "repositories"
+    );
+    const repository = repositories.find(item =>
+      String(item.id).toLowerCase() === requestedLeaf ||
+      String(item.name || "").toLowerCase() === requestedLeaf
+    );
+    if (!repository) {
+      return undefined;
+    }
+    const rawRef = String(repositoryResource.ref || repository.defaultBranch || "refs/heads/main");
+    const versionType = rawRef.startsWith("refs/tags/") ? "tag" : "branch";
+    const version = rawRef.replace(/^refs\/(?:heads|tags)\//, "");
+    const cacheKey = [
+      api.serverUrl || api.organization,
+      repositoryProject,
+      repository.id,
+      reference.path,
+      versionType,
+      version
+    ].join("|");
+    const cached = templateContentCache.get(cacheKey);
+    if (cached?.expires > Date.now()) {
+      return cached;
+    }
+    const remoteText = await api.getGitItem(
+      repository.id,
+      `/${reference.path.replace(/^\/+/, "")}`,
+      version,
+      versionType,
+      repositoryProject
+    );
+    const content = typeof remoteText === "string"
+      ? remoteText
+      : typeof remoteText?.content === "string" ? remoteText.content : undefined;
+    if (content === undefined) {
+      return undefined;
+    }
+    const documentId = crypto.createHash("sha256").update(cacheKey).digest("hex");
+    const uri = vscode.Uri.from({
+      scheme: remoteTemplateScheme,
+      path: `/${documentId}/${path.basename(reference.path)}`,
+      query: documentId
+    });
+    remoteTemplateContents.set(documentId, content);
+    remoteTemplateChanged.fire(uri);
+    const result = {content, uri, expires: Date.now() + 60_000};
+    templateContentCache.set(cacheKey, result);
+    return result;
   };
 
   context.subscriptions.push(
@@ -576,9 +771,25 @@ function activate(context) {
       item.message,
       vscode.DiagnosticSeverity.Warning
     ));
+    diagnostics.push(...getScheduleDiagnostics(text).map(item => new vscode.Diagnostic(
+      new vscode.Range(document.positionAt(item.start), document.positionAt(item.end)),
+      item.message,
+      vscode.DiagnosticSeverity.Warning
+    )));
+    if (/\b(?:pool|environment)\s*:/i.test(text)) {
+      const catalogs = await getYamlCatalogs(vscode.workspace.getWorkspaceFolder(document.uri));
+      if (document.version !== version) {
+        return;
+      }
+      diagnostics.push(...getPipelineResourceDiagnostics(text, catalogs).map(item => new vscode.Diagnostic(
+        new vscode.Range(document.positionAt(item.start), document.positionAt(item.end)),
+        item.message,
+        vscode.DiagnosticSeverity.Warning
+      )));
+    }
     expressionDiagnostics.set(document.uri, diagnostics);
     if (/^\s*-\s*task\s*:/m.test(text)) {
-      const definitions = await getTaskDefinitions();
+      const definitions = await getTaskDefinitions(vscode.workspace.getWorkspaceFolder(document.uri));
       if (document.version !== version) {
         return;
       }
@@ -587,8 +798,30 @@ function activate(context) {
         item.message,
         vscode.DiagnosticSeverity.Warning
       )));
+      diagnostics.push(...getTaskReferenceDiagnostics(text, definitions).map(item => new vscode.Diagnostic(
+        new vscode.Range(document.positionAt(item.start), document.positionAt(item.end)),
+        item.message,
+        vscode.DiagnosticSeverity.Warning
+      )));
       expressionDiagnostics.set(document.uri, diagnostics);
     }
+    const templatePaths = [...new Set(getTemplateReferences(text).map(reference => reference.path))];
+    for (const templatePath of templatePaths) {
+      const template = await getTemplateText(document, templatePath).catch(() => undefined);
+      if (document.version !== version) {
+        return;
+      }
+      if (template) {
+        diagnostics.push(...getTemplateParameterDiagnostics(text, template.content, templatePath).map(item =>
+          new vscode.Diagnostic(
+            new vscode.Range(document.positionAt(item.start), document.positionAt(item.end)),
+            item.message,
+            vscode.DiagnosticSeverity.Warning
+          )
+        ));
+      }
+    }
+    expressionDiagnostics.set(document.uri, diagnostics);
   };
   context.subscriptions.push(
     vscode.workspace.onDidOpenTextDocument(validateYamlDocument),
@@ -609,10 +842,27 @@ function activate(context) {
         }
         const offset = document.offsetAt(position);
         const prefix = text.slice(0, offset);
-        const candidates = getExpressionCompletions(text, offset);
+        const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+        const definitions = await getTaskDefinitions(workspaceFolder);
+        const candidates = getExpressionCompletions(text, offset, definitions);
+        candidates.push(...getTaskReferenceCompletions(text, offset, definitions));
+        if (/\b(?:pool|environment)\b/i.test(prefix)) {
+          const catalogs = await getYamlCatalogs(workspaceFolder);
+          candidates.push(...getAzureYamlCompletions(text, offset, catalogs));
+        } else {
+          candidates.push(...getAzureYamlCompletions(text, offset));
+        }
         if (isTaskInputCompletionPosition(text, offset)) {
-          const definitions = await getTaskDefinitions();
           candidates.push(...getTaskInputCompletions(text, offset, definitions));
+        }
+        if (isTemplateParameterCompletionPosition(text, offset)) {
+          const templatePath = getTemplateParameterTemplateAt(text, offset);
+          const template = templatePath
+            ? await getTemplateText(document, templatePath).catch(() => undefined)
+            : undefined;
+          if (template) {
+            candidates.push(...getTemplateParameterCompletions(text, offset, template.content));
+          }
         }
         if (/\bvariables\.[A-Za-z0-9_.-]*$/.test(prefix) || /\$\([^)]*$/.test(prefix)) {
           const names = await getVariableNames();
@@ -625,7 +875,11 @@ function activate(context) {
         return candidates.map(candidate => {
           const kind = candidate.kind === "property"
             ? vscode.CompletionItemKind.Property
-            : vscode.CompletionItemKind.Function;
+            : candidate.kind === "value"
+              ? vscode.CompletionItemKind.Value
+            : candidate.kind === "reference"
+              ? vscode.CompletionItemKind.Reference
+              : vscode.CompletionItemKind.Function;
           const item = new vscode.CompletionItem(candidate.label, kind);
           item.insertText = candidate.insertText;
           item.detail = candidate.detail;
@@ -644,12 +898,17 @@ function activate(context) {
       {language: "azure-pipelines", scheme: "file"}
     ],
     {
-      provideHover(document, position) {
+      async provideHover(document, position) {
         const text = document.getText();
         if (!isAzurePipelineDocument(document.uri, text)) {
           return undefined;
         }
-        const result = getExpressionHover(text, document.offsetAt(position));
+        const offset = document.offsetAt(position);
+        const result = getExpressionHover(text, offset) || getTaskHover(
+          text,
+          offset,
+          await getTaskDefinitions(vscode.workspace.getWorkspaceFolder(document.uri))
+        );
         return result
           ? new vscode.Hover(new vscode.MarkdownString(`**${result.title}**\n\n${result.body}`))
           : undefined;
@@ -671,24 +930,36 @@ function activate(context) {
         if (!reference) {
           return undefined;
         }
-        const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
-        const candidates = resolveTemplatePaths(
-          reference.path,
-          document.uri.fsPath,
-          workspaceFolder?.uri.fsPath
-        );
-        for (const candidate of candidates) {
-          const uri = vscode.Uri.file(candidate);
-          try {
-            const stat = await vscode.workspace.fs.stat(uri);
-            if (stat.type & vscode.FileType.File) {
-              return new vscode.Location(uri, new vscode.Position(0, 0));
-            }
-          } catch {
-            // Try the next supported path base.
-          }
+        const template = await getTemplateText(document, reference.path).catch(() => undefined);
+        if (template) {
+          return new vscode.Location(template.uri, new vscode.Position(0, 0));
         }
         return undefined;
+      }
+    }
+  ));
+  context.subscriptions.push(vscode.languages.registerInlayHintsProvider(
+    [
+      {language: "yaml", scheme: "file"},
+      {language: "azure-pipelines", scheme: "file"}
+    ],
+    {
+      provideInlayHints(document, range) {
+        const text = document.getText();
+        if (!isAzurePipelineDocument(document.uri, text)) {
+          return [];
+        }
+        return getScheduleInlayHints(text)
+          .map(hint => ({
+            hint,
+            position: document.positionAt(hint.position)
+          }))
+          .filter(item => range.contains(item.position))
+          .map(({hint, position}) => {
+            const result = new vscode.InlayHint(position, hint.label, vscode.InlayHintKind.Type);
+            result.paddingLeft = true;
+            return result;
+          });
       }
     }
   ));
@@ -774,6 +1045,7 @@ function activate(context) {
     for (const target of targets) {
       await settings.update("organization", "", target);
       await settings.update("project", "", target);
+      await settings.update("serverUrl", "", target);
       await settings.update("authMethod", "pat", target);
     }
     refreshAll();
@@ -880,7 +1152,8 @@ function activate(context) {
       await vscode.env.openExternal(vscode.Uri.parse(webRunUrl(
         values.organization,
         values.project,
-        selected.run
+        selected.run,
+        values.serverUrl
       )));
     }
   });
@@ -891,7 +1164,9 @@ function activate(context) {
       return;
     }
     const values = await getConnectionValues(argument?.pipeline?.workspaceFolder);
-    await vscode.env.openExternal(vscode.Uri.parse(webRunUrl(values.organization, values.project, run)));
+    await vscode.env.openExternal(vscode.Uri.parse(
+      webRunUrl(values.organization, values.project, run, values.serverUrl)
+    ));
   });
 
   register("azure-pipelines.openEnvironment", async argument => {
@@ -900,7 +1175,10 @@ function activate(context) {
       return;
     }
     const values = await getConnectionValues(argument?.workspaceFolder);
-    const url = `https://dev.azure.com/${encodeURIComponent(values.organization)}/${encodeURIComponent(values.project)}/_environments/${encodeURIComponent(environment.id)}`;
+    const base = values.serverUrl
+      ? `${values.serverUrl.replace(/\/+$/, "")}/${encodeURIComponent(values.project)}`
+      : `https://dev.azure.com/${encodeURIComponent(values.organization)}/${encodeURIComponent(values.project)}`;
+    const url = `${base}/_environments/${encodeURIComponent(environment.id)}`;
     await vscode.env.openExternal(vscode.Uri.parse(url));
   });
 
@@ -1135,7 +1413,8 @@ function activate(context) {
         await vscode.env.openExternal(vscode.Uri.parse(webRunUrl(
           values.organization,
           values.project,
-          run
+          run,
+          values.serverUrl
         )));
       }
     } catch (error) {
@@ -1444,7 +1723,7 @@ function activate(context) {
     }
     const values = await getConnectionValues(pipeline?.workspaceFolder);
     await vscode.env.openExternal(vscode.Uri.parse(
-      webLogUrl(values.organization, values.project, run, record)
+      webLogUrl(values.organization, values.project, run, record, values.serverUrl)
     ));
   });
 
@@ -1522,6 +1801,163 @@ function activate(context) {
       void vscode.window.showErrorMessage(`Could not update variable group: ${error.message}`);
     }
   };
+
+  register("azure-pipelines.addSecureFile", async argument => {
+    const api = await getApi(true, argument?.workspaceFolder);
+    if (!api) {
+      return;
+    }
+    const selected = await vscode.window.showOpenDialog({
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      openLabel: "Upload Secure File"
+    });
+    const fileUri = selected?.[0];
+    if (!fileUri) {
+      return;
+    }
+    const name = await vscode.window.showInputBox({
+      prompt: "Secure file name",
+      value: path.basename(fileUri.fsPath),
+      ignoreFocusOut: true
+    });
+    if (!name?.trim()) {
+      return;
+    }
+    try {
+      const contents = await vscode.workspace.fs.readFile(fileUri);
+      await api.uploadSecureFile(name.trim(), contents);
+      libraryProvider.refresh();
+      void vscode.window.showInformationMessage(`Uploaded secure file "${name.trim()}".`);
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not upload secure file: ${error.message}`);
+    }
+  });
+
+  register("azure-pipelines.deleteSecureFile", async argument => {
+    const file = argument?.secureFile;
+    if (!file) {
+      return;
+    }
+    const answer = await vscode.window.showWarningMessage(
+      `Delete secure file "${file.name}"? Pipelines using this file may stop working.`,
+      {modal: true},
+      "Delete"
+    );
+    if (answer !== "Delete") {
+      return;
+    }
+    try {
+      const api = await getApi(true, argument.workspaceFolder);
+      if (!api) {
+        return;
+      }
+      await api.deleteSecureFile(file.id);
+      libraryProvider.refresh();
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not delete secure file: ${error.message}`);
+    }
+  });
+
+  register("azure-pipelines.addServiceConnection", async argument => {
+    const api = await getApi(true, argument?.workspaceFolder);
+    if (!api) {
+      return;
+    }
+    const name = await vscode.window.showInputBox({
+      prompt: "Service connection name",
+      ignoreFocusOut: true
+    });
+    if (!name?.trim()) {
+      return;
+    }
+    const endpointUrl = await vscode.window.showInputBox({
+      prompt: "Service URL",
+      ignoreFocusOut: true
+    });
+    if (!endpointUrl?.trim()) {
+      return;
+    }
+    const auth = await vscode.window.showQuickPick([
+      {label: "No authentication", value: "None"},
+      {label: "Token", value: "Token"},
+      {label: "Username and password", value: "UsernamePassword"}
+    ], {placeHolder: "Choose generic service connection authentication"});
+    if (!auth) {
+      return;
+    }
+    const parameters = {};
+    if (auth.value === "Token") {
+      const token = await vscode.window.showInputBox({
+        prompt: "Access token",
+        password: true,
+        ignoreFocusOut: true
+      });
+      if (!token) {
+        return;
+      }
+      parameters.apitoken = token;
+    } else if (auth.value === "UsernamePassword") {
+      const username = await vscode.window.showInputBox({
+        prompt: "Username",
+        ignoreFocusOut: true
+      });
+      if (username === undefined) {
+        return;
+      }
+      const password = await vscode.window.showInputBox({
+        prompt: "Password",
+        password: true,
+        ignoreFocusOut: true
+      });
+      if (password === undefined) {
+        return;
+      }
+      parameters.username = username;
+      parameters.password = password;
+    }
+    try {
+      await api.createServiceEndpoint({
+        name: name.trim(),
+        url: endpointUrl.trim(),
+        type: "generic",
+        authorization: {scheme: auth.value, parameters},
+        data: {},
+        isShared: false,
+        isReady: true
+      });
+      libraryProvider.refresh();
+      void vscode.window.showInformationMessage(`Created service connection "${name.trim()}".`);
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not create service connection: ${error.message}`);
+    }
+  });
+
+  register("azure-pipelines.deleteServiceConnection", async argument => {
+    const endpoint = argument?.serviceConnection;
+    if (!endpoint) {
+      return;
+    }
+    const answer = await vscode.window.showWarningMessage(
+      `Delete service connection "${endpoint.name}"?`,
+      {modal: true},
+      "Delete"
+    );
+    if (answer !== "Delete") {
+      return;
+    }
+    try {
+      const api = await getApi(true, argument.workspaceFolder);
+      if (!api) {
+        return;
+      }
+      await api.deleteServiceEndpoint(endpoint.id);
+      libraryProvider.refresh();
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not delete service connection: ${error.message}`);
+    }
+  });
 
   register("azure-pipelines.addVariableGroup", async argument => {
     const api = await getApi(true, argument?.workspaceFolder);

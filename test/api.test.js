@@ -21,6 +21,21 @@ test("project URLs encode organization/project and include API version", () => {
   assert.equal(url.searchParams.get("api-version"), "7.1");
 });
 
+test("Azure DevOps Server requests use the configured collection URL and API version", () => {
+  const api = new AzureDevOpsApi({
+    organization: "",
+    project: "Build Project",
+    serverUrl: "https://ado.example.test/tfs/DefaultCollection/",
+    apiVersion: "6.0",
+    token: "pat",
+    fetchImpl: async () => ({ok: true, text: async () => "{}"})
+  });
+  const url = new URL(api.projectUrl("pipelines"));
+  assert.equal(url.origin, "https://ado.example.test");
+  assert.equal(url.pathname, "/tfs/DefaultCollection/Build%20Project/_apis/pipelines");
+  assert.equal(url.searchParams.get("api-version"), "6.0");
+});
+
 test("requests use the PAT as basic-auth password and parse JSON", async () => {
   let request;
   const api = createApi(async (_url, options) => {
@@ -43,6 +58,40 @@ test("task definitions use the organization-scoped Distributed Task endpoint", a
   assert.equal(requestUrl.pathname, "/contoso/_apis/distributedtask/tasks");
   assert.equal(requestUrl.searchParams.get("api-version"), "7.1");
   assert.deepEqual(response.value, [{name: "Bash"}]);
+});
+
+test("secure file uploads send bytes as a raw request body", async () => {
+  let request;
+  let requestUrl;
+  const api = createApi(async (url, options) => {
+    requestUrl = new URL(url);
+    request = options;
+    return {ok: true, text: async () => ""};
+  });
+  const bytes = Uint8Array.from([1, 2, 3]);
+  await api.uploadSecureFile("signing.pfx", bytes);
+  assert.equal(request.method, "PUT");
+  assert.equal(request.headers["Content-Type"], "application/octet-stream");
+  assert.equal(request.body, bytes);
+  assert.equal(requestUrl.searchParams.get("name"), "signing.pfx");
+});
+
+test("agent pools and service connection APIs use the proper REST routes", async () => {
+  const requests = [];
+  const api = createApi(async (url, options) => {
+    requests.push({url: new URL(url), options});
+    return {ok: true, text: async () => "{}"};
+  });
+  await api.listAgentPools();
+  await api.listAgents(9);
+  await api.listServiceEndpoints();
+  await api.createServiceEndpoint({name: "generic"});
+  await api.deleteServiceEndpoint("endpoint-id");
+  assert.match(requests[0].url.pathname, /_apis\/distributedtask\/pools$/);
+  assert.match(requests[1].url.pathname, /_apis\/distributedtask\/pools\/9\/agents$/);
+  assert.match(requests[2].url.pathname, /_apis\/serviceendpoint\/endpoints$/);
+  assert.equal(requests[3].options.method, "POST");
+  assert.equal(requests[4].options.method, "DELETE");
 });
 
 test("Microsoft authentication sends a bearer token instead of Basic credentials", async () => {
@@ -316,4 +365,11 @@ test("step links open the matching Azure DevOps timeline log", () => {
   assert.equal(url.searchParams.get("view"), "logs");
   assert.equal(url.searchParams.get("j"), "job-guid");
   assert.equal(url.searchParams.get("t"), "task-guid");
+});
+
+test("browser links honor an Azure DevOps Server collection URL", () => {
+  assert.equal(
+    webRunUrl("server", "Build Project", {id: 7}, "https://ado.example.test/tfs/Collection"),
+    "https://ado.example.test/tfs/Collection/Build%20Project/_build/results?buildId=7&view=results"
+  );
 });

@@ -458,7 +458,7 @@ class LibraryProvider {
       if (folders.length > 1) {
         const connections = await Promise.all(folders.map(folder => this.getApi(false, folder)));
         const projects = new Set(connections.filter(Boolean).map(api =>
-          `${api.organization.toLowerCase()}/${api.project.toLowerCase()}`
+          `${(api.serverUrl || api.organization).toLowerCase()}/${api.project.toLowerCase()}`
         ));
         if (projects.size > 1) {
           return folders.map(workspaceNode);
@@ -480,11 +480,22 @@ class LibraryProvider {
 
     try {
       if (!element || element.contextValue === "azurePipelineWorkspace") {
-        const [environmentsResult, groupsResult, definitionsResult, approvalsResult] = await Promise.allSettled([
+        const [
+          environmentsResult,
+          groupsResult,
+          definitionsResult,
+          approvalsResult,
+          secureFilesResult,
+          serviceConnectionsResult,
+          agentPoolsResult
+        ] = await Promise.allSettled([
           api.listEnvironments(),
           api.listVariableGroups(),
           api.listBuildDefinitions(),
-          api.listPendingApprovals()
+          api.listPendingApprovals(),
+          Promise.resolve().then(() => api.listSecureFiles?.() || {value: []}),
+          Promise.resolve().then(() => api.listServiceEndpoints?.() || {value: []}),
+          Promise.resolve().then(() => api.listAgentPools?.() || {value: []})
         ]);
         return [
           this.groupNode(
@@ -522,8 +533,105 @@ class LibraryProvider {
               : [],
             approvalsResult.status === "rejected" ? approvalsResult.reason.message : undefined,
             workspaceFolder
+          ),
+          this.groupNode(
+            "Secure Files",
+            "secureFiles",
+            secureFilesResult.status === "fulfilled"
+              ? responseItems(secureFilesResult.value, "secureFiles")
+              : [],
+            secureFilesResult.status === "rejected" ? secureFilesResult.reason.message : undefined,
+            workspaceFolder
+          ),
+          this.groupNode(
+            "Service Connections",
+            "serviceConnections",
+            serviceConnectionsResult.status === "fulfilled"
+              ? responseItems(serviceConnectionsResult.value, "serviceEndpoints")
+              : [],
+            serviceConnectionsResult.status === "rejected" ? serviceConnectionsResult.reason.message : undefined,
+            workspaceFolder
+          ),
+          this.groupNode(
+            "Agent Pools",
+            "agentPools",
+            agentPoolsResult.status === "fulfilled"
+              ? responseItems(agentPoolsResult.value, "pool")
+              : [],
+            agentPoolsResult.status === "rejected" ? agentPoolsResult.reason.message : undefined,
+            workspaceFolder
           )
         ];
+      }
+      if (element.section === "agentPools") {
+        if (element.error) {
+          return [informationNode("Could not load agent pools", element.error)];
+        }
+        return element.items.map(pool => {
+          const item = new vscode.TreeItem(
+            pool.name || `Pool ${pool.id}`,
+            vscode.TreeItemCollapsibleState.Collapsed
+          );
+          item.id = `agent-pool-${workspaceFolder?.uri.toString() || ""}-${pool.id}`;
+          item.contextValue = "azureAgentPool";
+          item.pool = pool;
+          item.workspaceFolder = workspaceFolder;
+          item.description = pool.isHosted ? "Microsoft-hosted" : "Self-hosted";
+          item.iconPath = new vscode.ThemeIcon("server");
+          return item;
+        });
+      }
+      if (element.pool) {
+        const response = await api.listAgents(element.pool.id);
+        return responseItems(response, "agents").map(agent => {
+          const item = new vscode.TreeItem(
+            agent.name || `Agent ${agent.id}`,
+            vscode.TreeItemCollapsibleState.None
+          );
+          item.id = `agent-${workspaceFolder?.uri.toString() || ""}-${element.pool.id}-${agent.id}`;
+          item.contextValue = "azureAgent";
+          item.description = agent.status || (agent.enabled === false ? "Disabled" : "Online");
+          item.tooltip = [
+            agent.version ? `Version ${agent.version}` : "",
+            agent.osDescription || agent.osType || "",
+            agent.assignedRequest ? `Assigned: ${agent.assignedRequest.definition?.name || "in use"}` : ""
+          ].filter(Boolean).join("\n");
+          item.iconPath = new vscode.ThemeIcon(
+            agent.enabled === false ? "circle-slash" : agent.status === "offline" ? "debug-disconnect" : "vm"
+          );
+          item.workspaceFolder = workspaceFolder;
+          return item;
+        });
+      }
+      if (element.section === "secureFiles") {
+        if (element.error) {
+          return [informationNode("Could not load secure files", element.error)];
+        }
+        return element.items.map(file => {
+          const item = new vscode.TreeItem(file.name, vscode.TreeItemCollapsibleState.None);
+          item.id = `secure-file-${workspaceFolder?.uri.toString() || ""}-${file.id}`;
+          item.contextValue = "azureSecureFile";
+          item.secureFile = file;
+          item.workspaceFolder = workspaceFolder;
+          item.description = file.properties?.uploadedBy?.displayName || "";
+          item.iconPath = new vscode.ThemeIcon("lock");
+          return item;
+        });
+      }
+      if (element.section === "serviceConnections") {
+        if (element.error) {
+          return [informationNode("Could not load service connections", element.error)];
+        }
+        return element.items.map(endpoint => {
+          const item = new vscode.TreeItem(endpoint.name, vscode.TreeItemCollapsibleState.None);
+          item.id = `service-connection-${workspaceFolder?.uri.toString() || ""}-${endpoint.id}`;
+          item.contextValue = "azureServiceConnection";
+          item.serviceConnection = endpoint;
+          item.workspaceFolder = workspaceFolder;
+          item.description = endpoint.type || "Service connection";
+          item.iconPath = new vscode.ThemeIcon("plug");
+          return item;
+        });
       }
       if (element.section === "approvals") {
         if (element.error) {
@@ -679,13 +787,19 @@ class LibraryProvider {
       environments: "azureEnvironments",
       variableGroups: "azureVariableGroups",
       pipelineDefinitions: "azurePipelineDefinitions",
-      approvals: "azurePipelineApprovals"
+      approvals: "azurePipelineApprovals",
+      secureFiles: "azureSecureFiles",
+      serviceConnections: "azureServiceConnections",
+      agentPools: "azureAgentPools"
     }[section];
     item.iconPath = {
       environments: new vscode.ThemeIcon("cloud"),
       variableGroups: new vscode.ThemeIcon("library"),
       pipelineDefinitions: new vscode.ThemeIcon("symbol-namespace"),
-      approvals: new vscode.ThemeIcon("shield")
+      approvals: new vscode.ThemeIcon("shield"),
+      secureFiles: new vscode.ThemeIcon("lock"),
+      serviceConnections: new vscode.ThemeIcon("plug"),
+      agentPools: new vscode.ThemeIcon("server")
     }[section];
     item.description = error ? "Unavailable" : String(items.length);
     return item;

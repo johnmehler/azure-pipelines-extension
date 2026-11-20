@@ -220,6 +220,26 @@
         "command": "azure-pipelines.deletePipelineVariable",
         "title": "Delete Pipeline Variable",
         "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.addSecureFile",
+        "title": "Upload Secure File",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.deleteSecureFile",
+        "title": "Delete Secure File",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.addServiceConnection",
+        "title": "Create Generic Service Connection",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.deleteServiceConnection",
+        "title": "Delete Service Connection",
+        "category": "Azure Pipelines"
       }
     ],
     "menus": {
@@ -373,6 +393,22 @@
         {
           "command": "azure-pipelines.copyVariableValue",
           "when": "viewItem == azurePipelineVariable"
+        },
+        {
+          "command": "azure-pipelines.addSecureFile",
+          "when": "viewItem == azureSecureFiles"
+        },
+        {
+          "command": "azure-pipelines.deleteSecureFile",
+          "when": "viewItem == azureSecureFile"
+        },
+        {
+          "command": "azure-pipelines.addServiceConnection",
+          "when": "viewItem == azureServiceConnections"
+        },
+        {
+          "command": "azure-pipelines.deleteServiceConnection",
+          "when": "viewItem == azureServiceConnection"
         }
       ]
     },
@@ -388,6 +424,16 @@
           "type": "string",
           "default": "",
           "description": "Azure DevOps project name or ID."
+        },
+        "azure-pipelines.serverUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Azure DevOps Server collection URL for on-premises deployments, e.g. https://ado.example.com/tfs/DefaultCollection. Leave empty for Azure DevOps Services."
+        },
+        "azure-pipelines.apiVersion": {
+          "type": "string",
+          "default": "7.1",
+          "description": "Azure DevOps REST API version. Set this to a version supported by your Azure DevOps Server."
         },
         "azure-pipelines.authMethod": {
           "type": "string",
@@ -455,7 +501,8 @@
     ]
   },
   "extensionDependencies": [
-    "redhat.vscode-yaml"
+    "redhat.vscode-yaml",
+    "ms-azure-devops.azure-pipelines"
   ],
   "dependencies": {
     "yaml": "^2.9.1"

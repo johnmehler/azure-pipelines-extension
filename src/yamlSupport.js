@@ -39,6 +39,18 @@ const EXPRESSION_FUNCTIONS = [
 ].map(([name, signature, description]) => ({name, signature, description}));
 
 const FUNCTION_MAP = new Map(EXPRESSION_FUNCTIONS.map(item => [item.name, item]));
+const FUNCTION_ARITIES = new Map([
+  ["and", [2, Infinity]], ["coalesce", [2, Infinity]], ["contains", [2, 2]],
+  ["containsValue", [2, 2]], ["convertToJson", [1, 1]], ["counter", [2, 2]],
+  ["endsWith", [2, 2]], ["eq", [2, 2]], ["format", [1, Infinity]],
+  ["ge", [2, 2]], ["gt", [2, 2]], ["iif", [3, 3]], ["in", [2, Infinity]],
+  ["join", [2, 2]], ["le", [2, 2]], ["length", [1, 1]], ["lower", [1, 1]],
+  ["lt", [2, 2]], ["ne", [2, 2]], ["not", [1, 1]], ["notIn", [2, Infinity]],
+  ["or", [2, Infinity]], ["replace", [3, 3]], ["split", [2, 2]],
+  ["startsWith", [2, 2]], ["upper", [1, 1]], ["succeeded", [0, 0]],
+  ["failed", [0, 0]], ["canceled", [0, 0]], ["succeededOrFailed", [0, 0]],
+  ["always", [0, 0]], ["xor", [2, 2]]
+]);
 const CONTEXTS = [
   ["variables", "Pipeline and predefined variables."],
   ["parameters", "Compile-time template parameters."],
@@ -47,9 +59,27 @@ const CONTEXTS = [
   ["resources", "Pipeline resource metadata."]
 ];
 const SYSTEM_VARIABLES = [
-  "Build.BuildId", "Build.BuildNumber", "Build.Reason", "Build.SourceBranch",
-  "Build.SourceBranchName", "Build.SourceVersion", "Build.Repository.Name",
-  "System.CollectionUri", "System.DefinitionId", "System.JobId", "System.TeamProject"
+  "Agent.BuildDirectory", "Agent.HomeDirectory", "Agent.Id", "Agent.JobName",
+  "Agent.MachineName", "Agent.Name", "Agent.OS", "Agent.OSArchitecture",
+  "Agent.TempDirectory", "Agent.ToolsDirectory", "Agent.WorkFolder",
+  "Build.ArtifactStagingDirectory", "Build.BinariesDirectory", "Build.BuildId",
+  "Build.BuildNumber", "Build.BuildUri", "Build.CronSchedule.DisplayName",
+  "Build.DefinitionName", "Build.DefinitionVersion", "Build.QueuedBy",
+  "Build.QueuedById", "Build.Reason", "Build.Repository.Clean",
+  "Build.Repository.Git.SubmoduleCheckout", "Build.Repository.Id",
+  "Build.Repository.LocalPath", "Build.Repository.Name", "Build.Repository.Provider",
+  "Build.Repository.Uri", "Build.RequestedFor", "Build.RequestedForEmail",
+  "Build.RequestedForId", "Build.SourceBranch", "Build.SourceBranchName",
+  "Build.SourceVersion", "Build.SourceVersionMessage", "Build.SourcesDirectory",
+  "Build.StagingDirectory", "Common.TestResultsDirectory", "Pipeline.Workspace",
+  "System.CollectionId", "System.CollectionUri", "System.DefaultWorkingDirectory",
+  "System.DefinitionId", "System.DefinitionName", "System.HostType",
+  "System.JobAttempt", "System.JobId", "System.JobName", "System.JobDisplayName",
+  "System.PlanId", "System.PullRequest.IsFork", "System.PullRequest.PullRequestId",
+  "System.PullRequest.SourceBranch", "System.PullRequest.SourceCommitId",
+  "System.PullRequest.TargetBranch", "System.StageAttempt", "System.StageName",
+  "System.TeamFoundationCollectionUri", "System.TeamProject", "System.TeamProjectId",
+  "System.TimelineId", "System.TotalJobsInPhase"
 ];
 
 function parsePipelineYaml(text) {
@@ -95,6 +125,42 @@ function getTemplateReferenceAt(text, offset) {
   return references.sort((left, right) => (left.end - left.start) - (right.end - right.start))[0];
 }
 
+function getTemplateReferences(text) {
+  let document;
+  try {
+    document = YAML.parseDocument(text, {uniqueKeys: false});
+  } catch {
+    return [];
+  }
+  const references = [];
+  const visit = node => {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    if (node.key && node.value) {
+      if (
+        node.key.value === "template" &&
+        typeof node.value.value === "string" &&
+        Array.isArray(node.value.range)
+      ) {
+        references.push({
+          path: node.value.value,
+          start: node.value.range[0],
+          end: node.value.range[1]
+        });
+      }
+      visit(node.key);
+      visit(node.value);
+      return;
+    }
+    if (Array.isArray(node.items)) {
+      node.items.forEach(visit);
+    }
+  };
+  visit(document.contents);
+  return references;
+}
+
 function resolveTemplatePaths(templatePath, documentPath, workspaceRoot) {
   if (
     typeof templatePath !== "string" ||
@@ -119,6 +185,529 @@ function resolveTemplatePaths(templatePath, documentPath, workspaceRoot) {
   return [...new Set(candidates)];
 }
 
+function parseTemplateReference(reference) {
+  if (typeof reference !== "string") {
+    return undefined;
+  }
+  const separator = reference.lastIndexOf("@");
+  const repository = separator > 0 ? reference.slice(separator + 1) : undefined;
+  const templatePath = separator > 0 ? reference.slice(0, separator) : reference;
+  if (!templatePath.trim() || /[$*]/.test(templatePath)) {
+    return undefined;
+  }
+  return {path: templatePath, repository};
+}
+
+function templateParameterUseAt(text, offset) {
+  let document;
+  try {
+    document = YAML.parseDocument(text, {uniqueKeys: false});
+  } catch {
+    return undefined;
+  }
+  const matches = [];
+  const visit = node => {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    if (Array.isArray(node.items)) {
+      const templatePair = node.items.find(pair => pair?.key?.value === "template");
+      const parametersPair = node.items.find(pair => pair?.key?.value === "parameters");
+      if (
+        templatePair &&
+        parametersPair &&
+        typeof templatePair.value?.value === "string" &&
+        Array.isArray(parametersPair.key?.range)
+      ) {
+        const parameterValue = parametersPair.value;
+        const range = parameterValue?.range;
+        const keyEnd = parametersPair.key.range[1];
+        const inValue = Array.isArray(range) && offset >= range[0] && offset <= range[1];
+        const startingEmptyLine = offset >= keyEnd &&
+          lineIndentAt(text, offset) > lineIndentAt(text, parametersPair.key.range[0]) &&
+          /^\s*:\s*$/.test(text.slice(keyEnd, offset));
+        if (inValue || startingEmptyLine) {
+          matches.push({templatePath: templatePair.value.value, parametersPair});
+        }
+      }
+      node.items.forEach(visit);
+    } else if (node.key) {
+      visit(node.key);
+      visit(node.value);
+    }
+  };
+  visit(document.contents);
+  return matches[0];
+}
+
+function isTemplateParameterCompletionPosition(text, offset) {
+  const use = templateParameterUseAt(text, offset);
+  if (!use) {
+    return false;
+  }
+  const lineStart = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+  const line = text.slice(lineStart, offset);
+  return /^\s*(?:[A-Za-z0-9_.-]+)?\s*:?\s*$/.test(line);
+}
+
+function getTemplateParameterTemplateAt(text, offset) {
+  return templateParameterUseAt(text, offset)?.templatePath;
+}
+
+function getTemplateParameterDefinitions(templateText) {
+  return getParameterDefinitions(templateText);
+}
+
+function getTemplateParameterCompletions(text, offset, templateText) {
+  const use = templateParameterUseAt(text, offset);
+  if (!use) {
+    return [];
+  }
+  const declared = getTemplateParameterDefinitions(templateText);
+  const value = use.parametersPair.value;
+  const pairs = Array.isArray(value?.items) ? value.items : [];
+  const current = pairs.find(pair =>
+    Array.isArray(pair?.key?.range) &&
+    offset >= pair.key.range[0] &&
+    offset <= pair.key.range[1]
+  );
+  const lineStart = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+  const partialKey = text.slice(lineStart, offset).match(/^\s*([A-Za-z0-9_.-]+)\s*:?\s*$/)?.[1];
+  const currentName = typeof current?.key?.value === "string"
+    ? current.key.value.toLowerCase()
+    : partialKey?.toLowerCase();
+  const supplied = new Set(pairs
+    .map(pair => pair?.key?.value)
+    .filter(name => typeof name === "string")
+    .map(name => name.toLowerCase())
+    .filter(name => name !== currentName));
+  const prefix = currentName || "";
+  return declared.filter(parameter =>
+    typeof parameter.name === "string" &&
+    parameter.name.toLowerCase().startsWith(prefix) &&
+    !supplied.has(parameter.name.toLowerCase())
+  ).map(parameter => ({
+    label: parameter.name,
+    insertText: parameter.name,
+    kind: "property",
+    detail: parameter.default === undefined ? "Required template parameter" : "Template parameter",
+    documentation: parameter.displayName
+      ? `${parameter.displayName}${parameter.type ? ` (${parameter.type})` : ""}`
+      : (parameter.type || "Template parameter")
+  }));
+}
+
+function templateParameterValueMatches(node, type) {
+  const value = node?.value;
+  if (["stepList", "jobList", "deploymentList", "stageList"].includes(type)) {
+    return node?.constructor?.name === "YAMLSeq";
+  }
+  if (type === "object") {
+    return node?.constructor?.name === "YAMLMap" || node?.constructor?.name === "YAMLSeq";
+  }
+  if (type === "boolean") {
+    return typeof value === "boolean";
+  }
+  if (type === "number") {
+    return typeof value === "number";
+  }
+  if (["string", "step", "job", "deployment", "stage"].includes(type)) {
+    return typeof value === "string";
+  }
+  return true;
+}
+
+function getTemplateParameterDiagnostics(text, templateText, referencePath) {
+  const definitions = getTemplateParameterDefinitions(templateText);
+  if (!definitions.length) {
+    return [];
+  }
+  const known = new Map(definitions
+    .filter(parameter => typeof parameter.name === "string")
+    .map(parameter => [parameter.name.toLowerCase(), parameter]));
+  const diagnostics = [];
+  let document;
+  try {
+    document = YAML.parseDocument(text, {uniqueKeys: false});
+  } catch {
+    return diagnostics;
+  }
+  const visit = node => {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    if (Array.isArray(node.items)) {
+      const templatePair = node.items.find(pair => pair?.key?.value === "template");
+      const parametersPair = node.items.find(pair => pair?.key?.value === "parameters");
+      if (
+        templatePair &&
+        (!referencePath || templatePair.value?.value === referencePath) &&
+        (!parametersPair || Array.isArray(parametersPair.value?.items))
+      ) {
+        const provided = new Set();
+        for (const pair of parametersPair?.value?.items || []) {
+          const name = pair?.key?.value;
+          if (typeof name !== "string") {
+            continue;
+          }
+          const parameter = known.get(name.toLowerCase());
+          if (!parameter) {
+            if (Array.isArray(pair.key.range)) {
+              diagnostics.push({
+                start: pair.key.range[0],
+                end: pair.key.range[1],
+                message: `Unknown template parameter "${name}".`
+              });
+            }
+            continue;
+          }
+          provided.add(name.toLowerCase());
+          const valueText = typeof pair.value?.value === "string" ? pair.value.value : "";
+          if (
+            parameter.type &&
+            !valueText.includes("${{") &&
+            !templateParameterValueMatches(pair.value, parameter.type) &&
+            Array.isArray(pair.value?.range)
+          ) {
+            diagnostics.push({
+              start: pair.value.range[0],
+              end: pair.value.range[1],
+              message: `Value for template parameter "${name}" does not match type "${parameter.type}".`
+            });
+          }
+          if (
+            Array.isArray(parameter.values) &&
+            parameter.values.length &&
+            typeof pair.value?.value === "string" &&
+            !parameter.values.some(value => String(value).toLowerCase() === pair.value.value.toLowerCase()) &&
+            Array.isArray(pair.value.range)
+          ) {
+            diagnostics.push({
+              start: pair.value.range[0],
+              end: pair.value.range[1],
+              message: `Invalid value for template parameter "${name}". Expected: ${parameter.values.join(", ")}.`
+            });
+          }
+        }
+        for (const parameter of definitions) {
+          if (parameter.default !== undefined || provided.has(parameter.name.toLowerCase())) {
+            continue;
+          }
+          const range = templatePair.value?.range || templatePair.key.range;
+          if (Array.isArray(range)) {
+            diagnostics.push({
+              start: range[0],
+              end: range[1],
+              message: `Required template parameter "${parameter.name}" is missing.`
+            });
+          }
+        }
+      }
+      node.items.forEach(visit);
+    } else if (node.key) {
+      visit(node.key);
+      visit(node.value);
+    }
+  };
+  visit(document.contents);
+  return diagnostics;
+}
+
+const VM_IMAGES = [
+  "ubuntu-latest", "ubuntu-24.04", "ubuntu-22.04", "ubuntu-20.04",
+  "windows-latest", "windows-2025", "windows-2022", "windows-2019",
+  "macOS-latest", "macOS-15", "macOS-14", "macOS-13"
+];
+
+function getAzureYamlCompletions(text, offset, {agentPools = [], environments = []} = {}) {
+  const lineStart = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+  const lineEnd = text.indexOf("\n", offset);
+  const line = text.slice(lineStart, lineEnd < 0 ? text.length : lineEnd);
+  const beforeLine = text.slice(0, lineStart);
+  const indent = line.match(/^\s*/)[0].length;
+  const ancestors = beforeLine.split(/\r?\n/).reverse();
+  let poolAncestor;
+  for (const candidate of ancestors) {
+    const match = candidate.match(/^(\s*)(?:-\s*)?pool\s*:/);
+    if (match && match[1].length < indent) {
+      poolAncestor = candidate;
+      break;
+    }
+    if (candidate.trim() && candidate.match(/^\s*/)[0].length < indent) {
+      break;
+    }
+  }
+  let environmentAncestor;
+  for (const candidate of ancestors) {
+    const match = candidate.match(/^(\s*)(?:-\s*)?environment\s*:/i);
+    if (match && match[1].length < indent) {
+      environmentAncestor = candidate;
+      break;
+    }
+    if (candidate.trim() && candidate.match(/^\s*/)[0].length < indent) {
+      break;
+    }
+  }
+  const pools = [...new Set(agentPools
+    .map(pool => typeof pool === "string" ? pool : pool?.name)
+    .filter(Boolean))];
+  const values = (names, detail) => names.map(name => ({
+    label: name,
+    insertText: name,
+    kind: "value",
+    detail
+  }));
+  const poolLine = line.match(/^\s*(?:-\s*)?pool\s*:\s*(.*)$/i);
+  if (poolLine && offset >= lineStart + line.indexOf(":") + 1) {
+    return [
+      ...values(VM_IMAGES, "Microsoft-hosted agent image"),
+      ...values(pools, "Azure DevOps agent pool")
+    ];
+  }
+  if (poolAncestor) {
+    const key = line.match(/^\s*(?:-\s*)?(name|vmImage)\s*:\s*(.*)$/i);
+    if (key && offset >= lineStart + line.indexOf(":") + 1) {
+      return key[1].toLowerCase() === "name"
+        ? values(pools, "Azure DevOps agent pool")
+        : values(VM_IMAGES, "Microsoft-hosted agent image");
+    }
+    if (/^\s*$/.test(line.slice(0, Math.max(0, offset - lineStart)))) {
+      return ["name:", "vmImage:"].map(label => ({
+        label,
+        insertText: label,
+        kind: "property",
+        detail: "Azure Pipelines pool property"
+      }));
+    }
+  }
+  const environmentLine = line.match(/^\s*(?:-\s*)?environment\s*:\s*(.*)$/i);
+  if (environmentLine && offset >= lineStart + line.indexOf(":") + 1) {
+    return values(environments.map(environment =>
+      typeof environment === "string" ? environment : environment?.name
+    ).filter(Boolean), "Azure Pipelines environment");
+  }
+  if (environmentAncestor) {
+    const nameLine = line.match(/^\s*(?:-\s*)?name\s*:\s*(.*)$/i);
+    if (nameLine && offset >= lineStart + line.indexOf(":") + 1) {
+      return values(environments.map(environment =>
+        typeof environment === "string" ? environment : environment?.name
+      ).filter(Boolean), "Azure Pipelines environment");
+    }
+    if (/^\s*$/.test(line.slice(0, Math.max(0, offset - lineStart)))) {
+      return [{
+        label: "name:",
+        insertText: "name:",
+        kind: "property",
+        detail: "Azure Pipelines environment property"
+      }];
+    }
+  }
+  return [];
+}
+
+function validateCronExpression(expression) {
+  const fields = String(expression || "").trim().split(/\s+/);
+  if (fields.length !== 5) {
+    return "Azure Pipelines cron schedules require exactly five fields.";
+  }
+  const ranges = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
+  for (let index = 0; index < fields.length; index += 1) {
+    const field = fields[index];
+    for (const segment of field.split(",")) {
+      const [base, step, extra] = segment.split("/");
+      if (extra !== undefined || (step !== undefined && !/^\d+$/.test(step))) {
+        return `Invalid step value in cron field ${index + 1}.`;
+      }
+      if (step !== undefined && Number(step) < 1) {
+        return `Cron step values must be greater than zero (field ${index + 1}).`;
+      }
+      if (base === "*") {
+        continue;
+      }
+      const range = base.match(/^(\d+)-(\d+)$/);
+      const values = range ? [Number(range[1]), Number(range[2])] : [/^\d+$/.test(base) ? Number(base) : NaN];
+      if (values.some(value => !Number.isInteger(value) || value < ranges[index][0] || value > ranges[index][1])) {
+        return `Value out of range in cron field ${index + 1} (${ranges[index][0]}-${ranges[index][1]}).`;
+      }
+      if (range && values[0] > values[1]) {
+        return `Cron range starts after it ends in field ${index + 1}.`;
+      }
+    }
+  }
+  return undefined;
+}
+
+function getScheduleDiagnostics(text) {
+  const diagnostics = [];
+  let document;
+  try {
+    document = YAML.parseDocument(text, {uniqueKeys: false});
+  } catch {
+    return diagnostics;
+  }
+  const visit = (node, inSchedules = false) => {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    if (Array.isArray(node.items)) {
+      node.items.forEach(pair => {
+        if (!pair?.key) {
+          visit(pair, inSchedules);
+          return;
+        }
+        const isSchedules = pair.key.value === "schedules";
+        if (inSchedules && pair.key.value === "cron" && typeof pair.value?.value === "string") {
+          const error = validateCronExpression(pair.value.value);
+          if (error && Array.isArray(pair.value.range)) {
+            diagnostics.push({
+              start: pair.value.range[0],
+              end: pair.value.range[1],
+              message: error
+            });
+          }
+        }
+        visit(pair.value, inSchedules || isSchedules);
+      });
+    }
+  };
+  visit(document.contents);
+  return diagnostics;
+}
+
+function describeCron(expression) {
+  const fields = String(expression || "").trim().split(/\s+/);
+  if (fields.length !== 5 || validateCronExpression(expression)) {
+    return undefined;
+  }
+  const [minute, hour, day, month, weekday] = fields;
+  const time = `${hour.padStart(2, "0")}:${minute.padStart(2, "0")} UTC`;
+  if (day === "*" && month === "*" && weekday === "*") {
+    return `Daily at ${time}`;
+  }
+  if (day === "*" && month === "*" && weekday === "1-5") {
+    return `Weekdays at ${time}`;
+  }
+  if (day === "*" && month === "*" && /^\d$/.test(weekday)) {
+    return `Weekly on ${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][Number(weekday) % 7]} at ${time}`;
+  }
+  if (month === "*" && weekday === "*" && /^\d{1,2}$/.test(day)) {
+    return `Monthly on day ${day} at ${time}`;
+  }
+  return `Scheduled in UTC: ${expression}`;
+}
+
+function getScheduleInlayHints(text) {
+  const hints = [];
+  let document;
+  try {
+    document = YAML.parseDocument(text, {uniqueKeys: false});
+  } catch {
+    return hints;
+  }
+  const visit = (node, inSchedules = false) => {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    if (Array.isArray(node.items)) {
+      node.items.forEach(pair => {
+        if (!pair?.key) {
+          visit(pair, inSchedules);
+          return;
+        }
+        const isSchedules = pair.key.value === "schedules";
+        if (inSchedules && pair.key.value === "cron" && typeof pair.value?.value === "string") {
+          const label = describeCron(pair.value.value);
+          if (label && Array.isArray(pair.value.range)) {
+            hints.push({position: pair.value.range[1], label});
+          }
+        }
+        visit(pair.value, inSchedules || isSchedules);
+      });
+    }
+  };
+  visit(document.contents);
+  return hints;
+}
+
+function getPipelineResourceDiagnostics(text, {agentPools = [], environments = []} = {}) {
+  const diagnostics = [];
+  const pools = new Set(agentPools
+    .map(pool => typeof pool === "string" ? pool : pool?.name)
+    .filter(Boolean)
+    .map(name => name.toLowerCase()));
+  const environmentNames = new Set(environments
+    .map(environment => typeof environment === "string" ? environment : environment?.name)
+    .filter(Boolean)
+    .map(name => name.toLowerCase()));
+  let document;
+  try {
+    document = YAML.parseDocument(text, {uniqueKeys: false});
+  } catch {
+    return diagnostics;
+  }
+  const visit = node => {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    if (Array.isArray(node.items)) {
+      for (const pair of node.items) {
+        if (!pair?.key) {
+          visit(pair);
+          continue;
+        }
+        if (pair?.key?.value === "pool") {
+          const poolNode = pair.value;
+          const poolPairs = Array.isArray(poolNode?.items) ? poolNode.items : [];
+          const namePair = poolPairs.find(entry => entry?.key?.value === "name");
+          const imagePair = poolPairs.find(entry => entry?.key?.value === "vmImage");
+          const scalarPool = typeof poolNode?.value === "string" ? poolNode : undefined;
+          const nameNode = namePair?.value || scalarPool;
+          const poolName = nameNode?.value;
+          if (
+            typeof poolName === "string" &&
+            pools.size &&
+            !pools.has(poolName.toLowerCase()) &&
+            Array.isArray(nameNode.range)
+          ) {
+            diagnostics.push({
+              start: nameNode.range[0],
+              end: nameNode.range[1],
+              message: `Unknown Azure DevOps agent pool "${poolName}".`
+            });
+          }
+          if (
+            typeof imagePair?.value?.value === "string" &&
+            !VM_IMAGES.some(image => image.toLowerCase() === imagePair.value.value.toLowerCase()) &&
+            Array.isArray(imagePair.value.range)
+          ) {
+            diagnostics.push({
+              start: imagePair.value.range[0],
+              end: imagePair.value.range[1],
+              message: `Unrecognized Microsoft-hosted image "${imagePair.value.value}".`
+            });
+          }
+        }
+        if (
+          pair?.key?.value === "environment" &&
+          typeof pair.value?.value === "string" &&
+          environmentNames.size &&
+          !environmentNames.has(pair.value.value.toLowerCase()) &&
+          Array.isArray(pair.value.range)
+        ) {
+          diagnostics.push({
+            start: pair.value.range[0],
+            end: pair.value.range[1],
+            message: `Unknown Azure Pipelines environment "${pair.value.value}".`
+          });
+        }
+        visit(pair.value);
+      }
+    }
+  };
+  visit(document.contents);
+  return diagnostics;
+}
+
 function parseTaskReference(reference) {
   const match = typeof reference === "string" && reference.trim().match(/^([^@\s]+)@(\d+)$/);
   return match ? {name: match[1].toLowerCase(), major: Number(match[2])} : undefined;
@@ -141,6 +730,55 @@ function taskDefinitionForReference(reference, definitions) {
     )[0];
 }
 
+function getTaskReferenceCompletions(text, offset, definitions) {
+  const lineStart = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+  const lineEnd = text.indexOf("\n", offset);
+  const line = text.slice(lineStart, lineEnd < 0 ? text.length : lineEnd);
+  const match = line.match(/^\s*-\s*task\s*:\s*/i);
+  if (!match || offset < lineStart + match[0].length) {
+    return [];
+  }
+  const versions = new Map();
+  for (const definition of definitions || []) {
+    if (!definition?.name || !Number.isFinite(Number(definition.version?.major))) {
+      continue;
+    }
+    const key = `${definition.name.toLowerCase()}@${Number(definition.version.major)}`;
+    const current = versions.get(key);
+    if (!current || Number(definition.version.minor || 0) > Number(current.version?.minor || 0)) {
+      versions.set(key, definition);
+    }
+  }
+  return [...versions.values()]
+    .sort((left, right) => left.name.localeCompare(right.name) ||
+      Number(right.version.major) - Number(left.version.major))
+    .map(definition => ({
+      label: `${definition.name}@${definition.version.major}`,
+      insertText: `${definition.name}@${definition.version.major}`,
+      kind: "reference",
+      detail: `${definition.friendlyName || definition.name} task, version ${definition.version.major}`,
+      documentation: definition.description || definition.helpMarkDown || undefined
+    }));
+}
+
+function getTaskHover(text, offset, definitions) {
+  for (const step of getTaskSteps(text)) {
+    const range = step.taskPair.value?.range;
+    if (!Array.isArray(range) || offset < range[0] || offset > range[1]) {
+      continue;
+    }
+    const definition = taskDefinitionForReference(step.taskPair.value.value, definitions);
+    if (!definition) {
+      return undefined;
+    }
+    return {
+      title: `${definition.friendlyName || definition.name}@${definition.version.major}`,
+      body: definition.helpMarkDown || definition.description || "Azure Pipelines task."
+    };
+  }
+  return undefined;
+}
+
 function getTaskSteps(text) {
   let document;
   try {
@@ -159,7 +797,8 @@ function getTaskSteps(text) {
         steps.push({
           node,
           taskPair,
-          inputsPair: node.items.find(pair => pair?.key?.value === "inputs")
+          inputsPair: node.items.find(pair => pair?.key?.value === "inputs"),
+          namePair: node.items.find(pair => pair?.key?.value === "name")
         });
       }
       node.items.forEach(visit);
@@ -170,6 +809,51 @@ function getTaskSteps(text) {
   };
   visit(document.contents);
   return steps;
+}
+
+function getTaskReferenceDiagnostics(text, definitions) {
+  if (!definitions?.length) {
+    return [];
+  }
+  const knownTasks = new Map();
+  for (const definition of definitions) {
+    if (!definition?.name || !Number.isFinite(Number(definition.version?.major))) {
+      continue;
+    }
+    const name = definition.name.toLowerCase();
+    if (!knownTasks.has(name)) {
+      knownTasks.set(name, new Set());
+    }
+    knownTasks.get(name).add(Number(definition.version.major));
+  }
+  const diagnostics = [];
+  for (const step of getTaskSteps(text)) {
+    const reference = String(step.taskPair.value.value || "").trim();
+    const parsed = parseTaskReference(reference);
+    if (!parsed) {
+      diagnostics.push({
+        start: step.taskPair.value.range?.[0] || 0,
+        end: step.taskPair.value.range?.[1] || 0,
+        message: `Task reference "${reference}" must use the name@major format.`
+      });
+      continue;
+    }
+    const majors = knownTasks.get(parsed.name);
+    if (!majors) {
+      diagnostics.push({
+        start: step.taskPair.value.range[0],
+        end: step.taskPair.value.range[1],
+        message: `Unknown Azure Pipelines task "${parsed.name}".`
+      });
+    } else if (!majors.has(parsed.major)) {
+      diagnostics.push({
+        start: step.taskPair.value.range[0],
+        end: step.taskPair.value.range[1],
+        message: `Task "${parsed.name}" has no version ${parsed.major}; available major versions: ${[...majors].sort().join(", ")}.`
+      });
+    }
+  }
+  return diagnostics;
 }
 
 function lineIndentAt(text, offset) {
@@ -551,7 +1235,26 @@ function maskStringLiterals(text) {
   return characters.join("");
 }
 
-function getExpressionCompletions(text, offset) {
+function getTaskOutputsByStep(text, definitions) {
+  const outputs = new Map();
+  for (const step of getTaskSteps(text)) {
+    const name = step.namePair?.value?.value;
+    if (typeof name !== "string" || !name) {
+      continue;
+    }
+    const definition = taskDefinitionForReference(step.taskPair.value.value, definitions);
+    const declaredOutputs = Array.isArray(definition?.outputVariables)
+      ? definition.outputVariables
+      : Array.isArray(definition?.outputs) ? definition.outputs : [];
+    const names = declaredOutputs
+      .map(output => typeof output === "string" ? output : output?.name)
+      .filter(Boolean);
+    outputs.set(name, names);
+  }
+  return outputs;
+}
+
+function getExpressionCompletions(text, offset, taskDefinitions = []) {
   const expression = expressionAt(text, offset);
   if (!expression) {
     return [];
@@ -565,6 +1268,7 @@ function getExpressionCompletions(text, offset) {
     variables.push(...root.variables.map(variable => variable?.name).filter(Boolean));
   }
   const parameters = (root.parameters || []).map(parameter => parameter?.name).filter(Boolean);
+  const taskOutputs = getTaskOutputsByStep(text, taskDefinitions);
   if (expression.kind === "macro") {
     return [...new Set([...variables, ...SYSTEM_VARIABLES])]
       .map(label => ({label, insertText: label, detail: "Pipeline variable"}));
@@ -573,7 +1277,21 @@ function getExpressionCompletions(text, offset) {
     /\bdependencies\.([A-Za-z0-9_-]+)\.outputs\[['"]?([^'"]*)?$/
   );
   if (dependencyOutput) {
-    const [stepPrefix = ""] = (dependencyOutput[2] || "").split(".");
+    const outputPrefix = dependencyOutput[2] || "";
+    const separator = outputPrefix.indexOf(".");
+    const stepPrefix = separator < 0 ? outputPrefix : outputPrefix.slice(0, separator);
+    const variablePrefix = separator < 0 ? "" : outputPrefix.slice(separator + 1);
+    if (separator >= 0) {
+      return [...taskOutputs.entries()]
+        .filter(([step]) => step.toLowerCase() === stepPrefix.toLowerCase())
+        .flatMap(([step, names]) => names
+          .filter(name => name.toLowerCase().startsWith(variablePrefix.toLowerCase()))
+          .map(name => ({
+            label: `${step}.${name}`,
+            insertText: `${step}.${name}`,
+            detail: "Task output variable"
+          })));
+    }
     return (stepsByJob.get(dependencyOutput[1]) || [])
       .filter(step => step.startsWith(stepPrefix))
       .map(step => ({
@@ -586,7 +1304,21 @@ function getExpressionCompletions(text, offset) {
     /\bstageDependencies\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.outputs\[['"]?([^'"]*)?$/
   );
   if (stageOutput) {
-    const [stepPrefix = ""] = (stageOutput[3] || "").split(".");
+    const outputPrefix = stageOutput[3] || "";
+    const separator = outputPrefix.indexOf(".");
+    const stepPrefix = separator < 0 ? outputPrefix : outputPrefix.slice(0, separator);
+    const variablePrefix = separator < 0 ? "" : outputPrefix.slice(separator + 1);
+    if (separator >= 0) {
+      return [...taskOutputs.entries()]
+        .filter(([step]) => step.toLowerCase() === stepPrefix.toLowerCase())
+        .flatMap(([step, names]) => names
+          .filter(name => name.toLowerCase().startsWith(variablePrefix.toLowerCase()))
+          .map(name => ({
+            label: `${step}.${name}`,
+            insertText: `${step}.${name}`,
+            detail: "Task output variable"
+          })));
+    }
     return (stepsByJob.get(stageOutput[2]) || [])
       .filter(step => step.startsWith(stepPrefix))
       .map(step => ({
@@ -623,6 +1355,13 @@ function getExpressionCompletions(text, offset) {
   }
   if (/\bsteps\.[A-Za-z0-9_-]*$/.test(prefix)) {
     return steps.map(label => ({label, insertText: label, detail: "Named pipeline step"}));
+  }
+  const stepOutput = prefix.match(/\bsteps\.([A-Za-z0-9_-]+)\.outputs\[['"]?([^'"]*)?$/);
+  if (stepOutput) {
+    const [stepName, outputPrefix = ""] = stepOutput.slice(1);
+    return (taskOutputs.get(stepName) || [])
+      .filter(name => name.toLowerCase().startsWith(outputPrefix.toLowerCase()))
+      .map(label => ({label, insertText: label, detail: "Task output variable"}));
   }
   const candidates = [
     ...EXPRESSION_FUNCTIONS.map(fn => ({
@@ -790,6 +1529,20 @@ function parseExpressionBody(body, baseOffset) {
       });
     }
   };
+  const reportFunctionArity = (token, argumentCount) => {
+    const arity = FUNCTION_ARITIES.get(token.value.toLowerCase());
+    if (!arity || (argumentCount >= arity[0] && argumentCount <= arity[1])) {
+      return;
+    }
+    const expectation = arity[0] === arity[1]
+      ? `${arity[0]} argument${arity[0] === 1 ? "" : "s"}`
+      : `at least ${arity[0]} arguments`;
+    diagnostics.push({
+      start: baseOffset + token.start,
+      end: baseOffset + token.end,
+      message: `Function "${token.value}" expects ${expectation}; received ${argumentCount}.`
+    });
+  };
   const synchronize = closing => {
     while (peek() && peek().type !== "," && peek().type !== closing) {
       index += 1;
@@ -825,13 +1578,17 @@ function parseExpressionBody(body, baseOffset) {
       }
     }
   };
-  const parseCallArguments = () => {
+  const parseCallArguments = functionToken => {
+    let argumentCount = 0;
+    let malformed = false;
     if (peek()?.type === ")") {
       index += 1;
+      reportFunctionArity(functionToken, argumentCount);
       return;
     }
     while (peek()) {
       if (peek().type === "," || peek().type === ")") {
+        malformed = true;
         report("Expected an expression argument.");
         if (peek().type === ")") {
           index += 1;
@@ -841,9 +1598,11 @@ function parseExpressionBody(body, baseOffset) {
         continue;
       }
       parseExpression();
+      argumentCount += 1;
       if (peek()?.type === ",") {
         index += 1;
         if (peek()?.type === ")") {
+          malformed = true;
           report("Expected an expression argument.");
           index += 1;
           return;
@@ -852,21 +1611,28 @@ function parseExpressionBody(body, baseOffset) {
       }
       if (peek()?.type === ")") {
         index += 1;
+        reportFunctionArity(functionToken, argumentCount);
         return;
       }
       if (!peek()) {
+        malformed = true;
         report("Expected ')' to close the function call.");
         return;
       }
+      malformed = true;
       report("Expected ',' or ')' after the function argument.");
       synchronize(")");
       if (peek()?.type === ",") {
         index += 1;
       } else if (peek()?.type === ")") {
         index += 1;
+        if (!malformed) {
+          reportFunctionArity(functionToken, argumentCount);
+        }
         return;
       }
     }
+    malformed = true;
     report("Expected ')' to close the function call.");
   };
   parseExpression = () => {
@@ -903,7 +1669,7 @@ function parseExpressionBody(body, baseOffset) {
       if (peek()?.type === "(") {
         reportUnknownFunction(token);
         index += 1;
-        parseCallArguments();
+        parseCallArguments(token);
       }
       parsePostfix();
       return;
@@ -948,10 +1714,73 @@ function parseExpressionBody(body, baseOffset) {
   return diagnostics;
 }
 
+function getExpressionReferenceDiagnostics(body, baseOffset, pipelineText, kind) {
+  const diagnostics = [];
+  const code = maskStringLiterals(body);
+  const document = parsePipelineYaml(pipelineText) || {};
+  const parameters = new Set((document.parameters || [])
+    .map(parameter => String(parameter?.name || "").toLowerCase())
+    .filter(Boolean));
+  const {stages, jobs, steps} = pipelineNames(pipelineText);
+  const jobNames = new Set([...stages, ...jobs].map(name => name.toLowerCase()));
+  const stepNames = new Set(steps.map(name => name.toLowerCase()));
+  const report = (index, length, message) => diagnostics.push({
+    start: baseOffset + index,
+    end: baseOffset + index + length,
+    message
+  });
+  const parameterReference = /\bparameters\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_-]*)|\[\s*(['"])(.*?)\2\s*\])/gi;
+  let match;
+  while ((match = parameterReference.exec(body))) {
+    if (code[match.index] === " ") {
+      continue;
+    }
+    const name = match[1] || match[3];
+    if (name && !parameters.has(name.toLowerCase())) {
+      const start = match.index + match[0].lastIndexOf(name);
+      report(start, name.length, `Unknown pipeline parameter "${name}".`);
+    }
+  }
+  const dependencyReference = /\bdependencies\.([A-Za-z_][A-Za-z0-9_-]*)/gi;
+  while ((match = dependencyReference.exec(code))) {
+    if (jobNames.size && !jobNames.has(match[1].toLowerCase())) {
+      report(match.index + match[0].lastIndexOf(match[1]), match[1].length,
+        `Unknown dependency "${match[1]}".`);
+    }
+  }
+  const stageDependencyReference = /\bstageDependencies\.([A-Za-z_][A-Za-z0-9_-]*)\.([A-Za-z_][A-Za-z0-9_-]*)/gi;
+  while ((match = stageDependencyReference.exec(code))) {
+    if (stages.length && !stages.some(name => name.toLowerCase() === match[1].toLowerCase())) {
+      report(match.index + match[0].indexOf(match[1]), match[1].length,
+        `Unknown stage dependency "${match[1]}".`);
+    }
+    if (jobs.length && !jobs.some(name => name.toLowerCase() === match[2].toLowerCase())) {
+      report(match.index + match[0].lastIndexOf(match[2]), match[2].length,
+        `Unknown job dependency "${match[2]}".`);
+    }
+  }
+  const stepReference = /\bsteps\.([A-Za-z_][A-Za-z0-9_-]*)/gi;
+  while ((match = stepReference.exec(code))) {
+    if (stepNames.size && !stepNames.has(match[1].toLowerCase())) {
+      report(match.index + match[0].lastIndexOf(match[1]), match[1].length,
+        `Unknown named pipeline step "${match[1]}".`);
+    }
+  }
+  if (kind === "template" && /\bcounter\s*\(/i.test(code)) {
+    const index = code.search(/\bcounter\s*\(/i);
+    report(index, "counter".length, "The counter() function is only available in runtime variable expressions.");
+  }
+  if (kind === "runtime" && /\bparameters\s*(?:\.|\[)/i.test(code)) {
+    const index = code.search(/\bparameters\s*(?:\.|\[)/i);
+    report(index, "parameters".length, "Template parameters are not available in runtime expressions.");
+  }
+  return diagnostics;
+}
+
 function getExpressionDiagnostics(text) {
   const diagnostics = [];
-  const openers = [["${{", "}}"], ["$[", "]"]];
-  for (const [open, close] of openers) {
+  const openers = [["${{", "}}", "template"], ["$[", "]", "runtime"]];
+  for (const [open, close, kind] of openers) {
     let searchFrom = 0;
     while (true) {
       const start = text.indexOf(open, searchFrom);
@@ -966,6 +1795,7 @@ function getExpressionDiagnostics(text) {
       }
       const body = text.slice(bodyStart, end);
       diagnostics.push(...parseExpressionBody(body, bodyStart));
+      diagnostics.push(...getExpressionReferenceDiagnostics(body, bodyStart, text, kind));
       searchFrom = end + close.length;
     }
   }
@@ -1003,6 +1833,12 @@ function getExpressionDiagnostics(text) {
         body,
         scalar.range[0] + quoteOffset + leadingWhitespace
       ));
+      diagnostics.push(...getExpressionReferenceDiagnostics(
+        body,
+        scalar.range[0] + quoteOffset + leadingWhitespace,
+        text,
+        "condition"
+      ));
     }
     if (node.key) {
       visitConditions(node.key);
@@ -1018,10 +1854,24 @@ module.exports = {
   getExpressionCompletions,
   getExpressionDiagnostics,
   getExpressionHover,
+  getTaskHover,
+  getTaskReferenceCompletions,
+  getTaskReferenceDiagnostics,
   getTemplateReferenceAt,
   getTaskInputCompletions,
   getTaskInputDiagnostics,
   isTaskInputCompletionPosition,
+  getTemplateParameterCompletions,
+  getTemplateParameterDiagnostics,
+  getTemplateParameterTemplateAt,
+  getTemplateReferences,
+  isTemplateParameterCompletionPosition,
+  parseTemplateReference,
+  getAzureYamlCompletions,
+  getPipelineResourceDiagnostics,
+  getScheduleDiagnostics,
+  getScheduleInlayHints,
+  validateCronExpression,
   isAzurePipelineDocument,
   getParameterDefinitions,
   parameterPromptKind,

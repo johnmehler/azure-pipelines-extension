@@ -28,12 +28,15 @@ function normalizeVariables(variables) {
   ]));
 }
 
-function webRunUrl(organization, project, run) {
-  return `https://dev.azure.com/${encodeURIComponent(organization)}/${encodeURIComponent(project)}/_build/results?buildId=${encodeURIComponent(run.id)}&view=results`;
+function webRunUrl(organization, project, run, serverUrl) {
+  const base = serverUrl
+    ? `${serverUrl.replace(/\/+$/, "")}/${encodeURIComponent(project)}`
+    : `https://dev.azure.com/${encodeURIComponent(organization)}/${encodeURIComponent(project)}`;
+  return `${base}/_build/results?buildId=${encodeURIComponent(run.id)}&view=results`;
 }
 
-function webLogUrl(organization, project, run, record) {
-  const url = new URL(webRunUrl(organization, project, run));
+function webLogUrl(organization, project, run, record, serverUrl) {
+  const url = new URL(webRunUrl(organization, project, run, serverUrl));
   url.searchParams.set("view", "logs");
   if (record?.parentId) {
     url.searchParams.set("j", record.parentId);

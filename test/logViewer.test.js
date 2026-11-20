@@ -25,6 +25,15 @@ test("Azure log group markers render as collapsible sections", () => {
   assert.doesNotMatch(html, /##\[endgroup\]/);
 });
 
+test("log viewer renders timestamps and provides find controls", () => {
+  const body = renderLogBody("2026-11-20T10:30:00.123Z: build started");
+  assert.match(body, /class="log-timestamp">2026-11-20T10:30:00\.123Z: /);
+  const html = renderLogHtml("build started", {cspSource: "vscode-webview:", nonce: "test"});
+  assert.match(html, /placeholder="Find in log"/);
+  assert.match(html, /id="show-timestamps"/);
+  assert.match(html, /id="next"/);
+});
+
 test("log tails merge overlapping lines without duplicating output", () => {
   assert.equal(mergeLogContent("one\ntwo\n", "two\nthree\n"), "one\ntwo\nthree\n");
   assert.equal(mergeLogContent("one\ntwo", "two\nthree"), "one\ntwo\nthree");

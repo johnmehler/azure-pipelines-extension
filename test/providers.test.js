@@ -219,3 +219,23 @@ test("Library exposes pending approvals with their related run", async () => {
   assert.equal(item.command.arguments[0].run.id, 42);
   assert.match(item.tooltip, /Approver: Alex/);
 });
+
+test("Library lists agent pools and agents with their status", async () => {
+  const api = {
+    listEnvironments: async () => ({value: []}),
+    listVariableGroups: async () => ({value: []}),
+    listBuildDefinitions: async () => ({value: []}),
+    listPendingApprovals: async () => ({value: []}),
+    listAgentPools: async () => ({value: [{id: 8, name: "Linux", isHosted: false}]}),
+    listAgents: async () => ({value: [{id: 3, name: "agent-01", status: "online", enabled: true}]})
+  };
+  const provider = new LibraryProvider({getApi: async () => api});
+  const sections = await provider.getChildren();
+  const agentPools = sections.find(section => section.section === "agentPools");
+  const [pool] = await provider.getChildren(agentPools);
+  const [agent] = await provider.getChildren(pool);
+
+  assert.equal(pool.label, "Linux");
+  assert.equal(agent.label, "agent-01");
+  assert.equal(agent.description, "online");
+});

@@ -7,19 +7,35 @@ class AzureDevOpsApi {
     organization,
     project,
     token,
+    serverUrl,
+    apiVersion = API_VERSION,
     authType = "pat",
     fetchImpl = globalThis.fetch,
     workspaceFolder
   }) {
-    if (!organization || !project || !token) {
-      throw new Error("Azure DevOps organization, project, and an access token are required.");
+    if ((!organization && !serverUrl) || !project || !token) {
+      throw new Error("An Azure DevOps organization or server URL, project, and access token are required.");
     }
     if (typeof fetchImpl !== "function") {
       throw new Error("This VS Code runtime does not provide fetch().");
     }
 
-    this.organization = organization.trim();
+    this.organization = String(organization || "").trim();
     this.project = project.trim();
+    if (serverUrl) {
+      const collectionUrl = new URL(serverUrl);
+      if (
+        collectionUrl.protocol !== "https:" ||
+        collectionUrl.username ||
+        collectionUrl.password ||
+        collectionUrl.search ||
+        collectionUrl.hash
+      ) {
+        throw new Error("Azure DevOps Server collection URL must be an HTTPS URL without credentials, query, or fragment.");
+      }
+      this.serverUrl = collectionUrl.toString().replace(/\/+$/, "");
+    }
+    this.apiVersion = String(apiVersion || API_VERSION);
     this.token = token;
     this.authType = authType;
     this.workspaceFolder = workspaceFolder;
@@ -29,18 +45,22 @@ class AzureDevOpsApi {
   }
 
   projectUrl(route, query = {}) {
-    const base = `https://dev.azure.com/${encodeURIComponent(this.organization)}/${encodeURIComponent(this.project)}/_apis/${route}`;
+    const base = `${this.collectionUrl()}/${encodeURIComponent(this.project)}/_apis/${route}`;
     return this.withQuery(base, query);
   }
 
   organizationUrl(route, query = {}) {
-    const base = `https://dev.azure.com/${encodeURIComponent(this.organization)}/_apis/${route}`;
+    const base = `${this.collectionUrl()}/_apis/${route}`;
     return this.withQuery(base, query);
+  }
+
+  collectionUrl() {
+    return this.serverUrl || `https://dev.azure.com/${encodeURIComponent(this.organization)}`;
   }
 
   withQuery(base, query) {
     const url = new URL(base);
-    for (const [key, value] of Object.entries({...query, "api-version": API_VERSION})) {
+    for (const [key, value] of Object.entries({...query, "api-version": this.apiVersion})) {
       if (value !== undefined && value !== null && value !== "") {
         url.searchParams.set(key, String(value));
       }
@@ -48,19 +68,26 @@ class AzureDevOpsApi {
     return url.toString();
   }
 
-  async request(url, {method = "GET", body, accept = "application/json"} = {}) {
+  async request(url, {
+    method = "GET",
+    body,
+    rawBody,
+    contentType = "application/json",
+    accept = "application/json",
+    rawResponse = false
+  } = {}) {
     const headers = {Accept: accept};
     headers.Authorization = this.authType === "bearer"
       ? `Bearer ${this.token}`
       : `Basic ${Buffer.from(`:${this.token}`).toString("base64")}`;
-    if (body !== undefined) {
-      headers["Content-Type"] = "application/json";
+    if (body !== undefined || rawBody !== undefined) {
+      headers["Content-Type"] = contentType;
     }
 
     const response = await this.fetch(url, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body)
+      body: rawBody !== undefined ? rawBody : body === undefined ? undefined : JSON.stringify(body)
     });
     const text = await response.text();
     if (!response.ok) {
@@ -75,6 +102,9 @@ class AzureDevOpsApi {
     }
     if (!text) {
       return null;
+    }
+    if (rawResponse) {
+      return text;
     }
     try {
       return JSON.parse(text);
@@ -193,6 +223,79 @@ class AzureDevOpsApi {
 
   listTaskDefinitions() {
     return this.request(this.organizationUrl("distributedtask/tasks"));
+  }
+
+  listAgentPools() {
+    return this.request(this.organizationUrl("distributedtask/pools", {
+      poolType: "automation",
+      actionFilter: "use"
+    }));
+  }
+
+  listAgents(poolId) {
+    return this.request(this.organizationUrl(
+      `distributedtask/pools/${encodeURIComponent(poolId)}/agents`,
+      {includeAssignedRequest: true}
+    ));
+  }
+
+  listSecureFiles() {
+    return this.request(this.projectUrl("distributedtask/securefiles", {$top: 1000}));
+  }
+
+  uploadSecureFile(name, contents) {
+    return this.request(this.projectUrl("distributedtask/securefiles", {name}), {
+      method: "PUT",
+      rawBody: contents,
+      contentType: "application/octet-stream"
+    });
+  }
+
+  deleteSecureFile(fileId) {
+    return this.request(this.projectUrl(
+      `distributedtask/securefiles/${encodeURIComponent(fileId)}`
+    ), {method: "DELETE"});
+  }
+
+  listServiceEndpoints() {
+    return this.request(this.projectUrl("serviceendpoint/endpoints", {$top: 1000}));
+  }
+
+  createServiceEndpoint(endpoint) {
+    return this.request(this.projectUrl("serviceendpoint/endpoints"), {
+      method: "POST",
+      body: endpoint
+    });
+  }
+
+  updateServiceEndpoint(endpoint) {
+    return this.request(this.projectUrl("serviceendpoint/endpoints"), {
+      method: "PUT",
+      body: endpoint
+    });
+  }
+
+  deleteServiceEndpoint(endpointId) {
+    return this.request(this.projectUrl(
+      `serviceendpoint/endpoints/${encodeURIComponent(endpointId)}`
+    ), {method: "DELETE"});
+  }
+
+  listGitRepositories(project = this.project) {
+    const base = `${this.collectionUrl()}/${encodeURIComponent(project)}/_apis/git/repositories`;
+    return this.request(this.withQuery(base, {$top: 1000}));
+  }
+
+  getGitItem(repositoryId, itemPath, version, versionType = "branch", project = this.project) {
+    const base = `${this.collectionUrl()}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repositoryId)}/items`;
+    return this.request(this.withQuery(base,
+      {
+        path: itemPath,
+        includeContent: true,
+        "versionDescriptor.version": version,
+        "versionDescriptor.versionType": versionType
+      }
+    ), {accept: "text/plain", rawResponse: true});
   }
 
   getBuildTimeline(runId, timelineId) {
