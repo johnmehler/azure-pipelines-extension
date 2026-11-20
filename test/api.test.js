@@ -33,6 +33,18 @@ test("requests use the PAT as basic-auth password and parse JSON", async () => {
   assert.equal(request.headers.Authorization, `Basic ${Buffer.from(":test-pat").toString("base64")}`);
 });
 
+test("task definitions use the organization-scoped Distributed Task endpoint", async () => {
+  let requestUrl;
+  const api = createApi(async url => {
+    requestUrl = new URL(url);
+    return {ok: true, text: async () => '{"value":[{"name":"Bash"}]}'};
+  });
+  const response = await api.listTaskDefinitions();
+  assert.equal(requestUrl.pathname, "/contoso/_apis/distributedtask/tasks");
+  assert.equal(requestUrl.searchParams.get("api-version"), "7.1");
+  assert.deepEqual(response.value, [{name: "Bash"}]);
+});
+
 test("Microsoft authentication sends a bearer token instead of Basic credentials", async () => {
   let request;
   const api = new AzureDevOpsApi({

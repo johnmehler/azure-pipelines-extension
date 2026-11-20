@@ -10,9 +10,14 @@ const {
   getExpressionCompletions,
   getExpressionDiagnostics,
   getExpressionHover,
+  getTemplateReferenceAt,
+  getTaskInputCompletions,
+  getTaskInputDiagnostics,
   getParameterDefinitions,
   isAzurePipelineDocument,
+  isTaskInputCompletionPosition,
   parameterPromptKind,
+  resolveTemplatePaths,
   typedParameterValue
 } = require("./yamlSupport");
 
@@ -303,6 +308,8 @@ function activate(context) {
   });
   const libraryProvider = new LibraryProvider({getApi});
   let variableNamesCache = {expires: 0, names: []};
+  let taskCatalogCache = {organization: "", expires: 0, definitions: []};
+  let taskCatalogRequest;
   context.subscriptions.push(libraryProvider.onDidChangeTreeData(() => {
     variableNamesCache.expires = 0;
   }));
@@ -325,6 +332,54 @@ function activate(context) {
       return [];
     }
   };
+  const getTaskDefinitions = async () => {
+    const organization = vscode.workspace.getConfiguration("azure-pipelines")
+      .get("organization", "").trim().toLowerCase();
+    if (!organization) {
+      return [];
+    }
+    if (taskCatalogCache.organization === organization && taskCatalogCache.expires > Date.now()) {
+      return taskCatalogCache.definitions;
+    }
+    if (taskCatalogRequest?.organization === organization) {
+      return taskCatalogRequest.promise;
+    }
+    const promise = (async () => {
+      try {
+        const api = await getApi(false);
+        if (!api) {
+          taskCatalogCache = {
+            organization,
+            expires: Date.now() + 60 * 1000,
+            definitions: []
+          };
+          return [];
+        }
+        const definitions = responseItems(await api.listTaskDefinitions(), "tasks");
+        taskCatalogCache = {
+          organization,
+          expires: Date.now() + 60 * 60 * 1000,
+          definitions
+        };
+        return definitions;
+      } catch {
+        taskCatalogCache = {
+          organization,
+          expires: Date.now() + 60 * 1000,
+          definitions: []
+        };
+        return [];
+      }
+    })();
+    taskCatalogRequest = {organization, promise};
+    try {
+      return await promise;
+    } finally {
+      if (taskCatalogRequest?.promise === promise) {
+        taskCatalogRequest = undefined;
+      }
+    }
+  };
 
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("azure-pipelines.pipelines", pipelinesProvider),
@@ -334,18 +389,31 @@ function activate(context) {
 
   const expressionDiagnostics = vscode.languages.createDiagnosticCollection("azure-pipelines");
   context.subscriptions.push(expressionDiagnostics);
-  const validateYamlDocument = document => {
+  const validateYamlDocument = async document => {
     const text = document.getText();
     if (!isAzurePipelineDocument(document.uri, text)) {
       expressionDiagnostics.delete(document.uri);
       return;
     }
+    const version = document.version;
     const diagnostics = getExpressionDiagnostics(text).map(item => new vscode.Diagnostic(
       new vscode.Range(document.positionAt(item.start), document.positionAt(item.end)),
       item.message,
       vscode.DiagnosticSeverity.Warning
     ));
     expressionDiagnostics.set(document.uri, diagnostics);
+    if (/^\s*-\s*task\s*:/m.test(text)) {
+      const definitions = await getTaskDefinitions();
+      if (document.version !== version) {
+        return;
+      }
+      diagnostics.push(...getTaskInputDiagnostics(text, definitions).map(item => new vscode.Diagnostic(
+        new vscode.Range(document.positionAt(item.start), document.positionAt(item.end)),
+        item.message,
+        vscode.DiagnosticSeverity.Warning
+      )));
+      expressionDiagnostics.set(document.uri, diagnostics);
+    }
   };
   context.subscriptions.push(
     vscode.workspace.onDidOpenTextDocument(validateYamlDocument),
@@ -367,6 +435,10 @@ function activate(context) {
         const offset = document.offsetAt(position);
         const prefix = text.slice(0, offset);
         const candidates = getExpressionCompletions(text, offset);
+        if (isTaskInputCompletionPosition(text, offset)) {
+          const definitions = await getTaskDefinitions();
+          candidates.push(...getTaskInputCompletions(text, offset, definitions));
+        }
         if (/\bvariables\.[A-Za-z0-9_.-]*$/.test(prefix) || /\$\([^)]*$/.test(prefix)) {
           const names = await getVariableNames();
           candidates.push(...names.map(label => ({
@@ -376,7 +448,10 @@ function activate(context) {
           })));
         }
         return candidates.map(candidate => {
-          const item = new vscode.CompletionItem(candidate.label, vscode.CompletionItemKind.Function);
+          const kind = candidate.kind === "property"
+            ? vscode.CompletionItemKind.Property
+            : vscode.CompletionItemKind.Function;
+          const item = new vscode.CompletionItem(candidate.label, kind);
           item.insertText = candidate.insertText;
           item.detail = candidate.detail;
           if (candidate.documentation) {
@@ -386,7 +461,7 @@ function activate(context) {
         });
       }
     },
-    "$", "{", ".", "[", "("
+    "$", "{", ".", "[", "(", " "
   ));
   context.subscriptions.push(vscode.languages.registerHoverProvider(
     [
@@ -403,6 +478,42 @@ function activate(context) {
         return result
           ? new vscode.Hover(new vscode.MarkdownString(`**${result.title}**\n\n${result.body}`))
           : undefined;
+      }
+    }
+  ));
+  context.subscriptions.push(vscode.languages.registerDefinitionProvider(
+    [
+      {language: "yaml", scheme: "file"},
+      {language: "azure-pipelines", scheme: "file"}
+    ],
+    {
+      async provideDefinition(document, position) {
+        const text = document.getText();
+        if (!isAzurePipelineDocument(document.uri, text)) {
+          return undefined;
+        }
+        const reference = getTemplateReferenceAt(text, document.offsetAt(position));
+        if (!reference) {
+          return undefined;
+        }
+        const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+        const candidates = resolveTemplatePaths(
+          reference.path,
+          document.uri.fsPath,
+          workspaceFolder?.uri.fsPath
+        );
+        for (const candidate of candidates) {
+          const uri = vscode.Uri.file(candidate);
+          try {
+            const stat = await vscode.workspace.fs.stat(uri);
+            if (stat.type & vscode.FileType.File) {
+              return new vscode.Location(uri, new vscode.Position(0, 0));
+            }
+          } catch {
+            // Try the next supported path base.
+          }
+        }
+        return undefined;
       }
     }
   ));

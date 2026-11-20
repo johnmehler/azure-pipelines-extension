@@ -1,5 +1,6 @@
 "use strict";
 
+const path = require("node:path");
 const YAML = require("yaml");
 
 const EXPRESSION_FUNCTIONS = [
@@ -57,6 +58,275 @@ function parsePipelineYaml(text) {
   } catch {
     return undefined;
   }
+}
+
+function getTemplateReferenceAt(text, offset) {
+  let document;
+  try {
+    document = YAML.parseDocument(text, {uniqueKeys: false});
+  } catch {
+    return undefined;
+  }
+  const references = [];
+  const visit = node => {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    if (node.key && node.value) {
+      if (
+        node.key.value === "template" &&
+        typeof node.value.value === "string" &&
+        Array.isArray(node.value.range)
+      ) {
+        const [start, end] = node.value.range;
+        if (offset >= start && offset <= end) {
+          references.push({path: node.value.value, start, end});
+        }
+      }
+      visit(node.key);
+      visit(node.value);
+      return;
+    }
+    if (Array.isArray(node.items)) {
+      node.items.forEach(visit);
+    }
+  };
+  visit(document.contents);
+  return references.sort((left, right) => (left.end - left.start) - (right.end - right.start))[0];
+}
+
+function resolveTemplatePaths(templatePath, documentPath, workspaceRoot) {
+  if (
+    typeof templatePath !== "string" ||
+    !templatePath.trim() ||
+    /[$*@]/.test(templatePath)
+  ) {
+    return [];
+  }
+  const isFileAbsolute = /^[A-Za-z]:[\\/]/.test(templatePath);
+  const isRepoRooted = /^[\\/]/.test(templatePath) && !isFileAbsolute;
+  const normalizedPath = templatePath.replace(/[\\/]+/g, path.sep);
+  if (isFileAbsolute) {
+    return [path.resolve(normalizedPath)];
+  }
+  const root = workspaceRoot || path.dirname(documentPath);
+  const candidates = [
+    path.resolve(root, normalizedPath.replace(/^[\\/]+/, ""))
+  ];
+  if (!isRepoRooted) {
+    candidates.push(path.resolve(path.dirname(documentPath), normalizedPath));
+  }
+  return [...new Set(candidates)];
+}
+
+function parseTaskReference(reference) {
+  const match = typeof reference === "string" && reference.trim().match(/^([^@\s]+)@(\d+)$/);
+  return match ? {name: match[1].toLowerCase(), major: Number(match[2])} : undefined;
+}
+
+function taskDefinitionForReference(reference, definitions) {
+  const parsed = parseTaskReference(reference);
+  if (!parsed) {
+    return undefined;
+  }
+  return (definitions || [])
+    .filter(definition =>
+      typeof definition?.name === "string" &&
+      definition.name.toLowerCase() === parsed.name &&
+      Number(definition.version?.major) === parsed.major
+    )
+    .sort((left, right) =>
+      Number(right.version?.minor || 0) - Number(left.version?.minor || 0) ||
+      Number(right.version?.patch || 0) - Number(left.version?.patch || 0)
+    )[0];
+}
+
+function getTaskSteps(text) {
+  let document;
+  try {
+    document = YAML.parseDocument(text, {uniqueKeys: false});
+  } catch {
+    return [];
+  }
+  const steps = [];
+  const visit = node => {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    if (Array.isArray(node.items)) {
+      const taskPair = node.items.find(pair => pair?.key?.value === "task");
+      if (taskPair && typeof taskPair.value?.value === "string") {
+        steps.push({
+          node,
+          taskPair,
+          inputsPair: node.items.find(pair => pair?.key?.value === "inputs")
+        });
+      }
+      node.items.forEach(visit);
+    } else if (node.key) {
+      visit(node.key);
+      visit(node.value);
+    }
+  };
+  visit(document.contents);
+  return steps;
+}
+
+function lineIndentAt(text, offset) {
+  const lineStart = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+  const beforeOffset = text.slice(lineStart, offset);
+  return beforeOffset.match(/^[ \t]*/)[0].length;
+}
+
+function taskInputStepAt(text, offset) {
+  return getTaskSteps(text).find(candidate => {
+    if (!Array.isArray(candidate.inputsPair?.key?.range)) {
+      return false;
+    }
+    const inputs = candidate.inputsPair?.value;
+    const range = inputs?.range;
+    const inputIndent = lineIndentAt(text, candidate.inputsPair.key.range[0]);
+    const currentLineStart = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+    const currentLine = text.slice(currentLineStart, offset);
+    const insideInputNode = Array.isArray(range) && offset >= range[0] && offset <= range[1];
+    const startingEmptyInputLine = offset >= candidate.inputsPair.key.range[1] &&
+      lineIndentAt(text, offset) > inputIndent &&
+      /^\s*:\s*$/.test(text.slice(candidate.inputsPair.key.range[1], offset));
+    if (!insideInputNode && !startingEmptyInputLine) {
+      return false;
+    }
+    return lineIndentAt(text, offset) > inputIndent &&
+      (/^\s*$/.test(currentLine) ||
+        inputs?.items?.some(pair =>
+          Array.isArray(pair?.key?.range) &&
+          offset >= pair.key.range[0] &&
+          offset <= pair.key.range[1]
+        ));
+  });
+}
+
+function isTaskInputCompletionPosition(text, offset) {
+  return Boolean(taskInputStepAt(text, offset));
+}
+
+function getTaskInputCompletions(text, offset, definitions) {
+  const step = taskInputStepAt(text, offset);
+  if (!step) {
+    return [];
+  }
+  const definition = taskDefinitionForReference(step.taskPair.value.value, definitions);
+  if (!definition || !Array.isArray(definition.inputs)) {
+    return [];
+  }
+  const inputs = step.inputsPair.value;
+  const inputPairs = Array.isArray(inputs?.items) ? inputs.items : [];
+  const currentPair = inputPairs.find(pair =>
+    Array.isArray(pair?.key?.range) &&
+    offset >= pair.key.range[0] &&
+    offset <= pair.key.range[1]
+  );
+  const currentName = typeof currentPair?.key?.value === "string"
+    ? currentPair.key.value.toLowerCase()
+    : undefined;
+  const existingNames = new Set(inputPairs
+    .map(pair => pair?.key?.value)
+    .filter(name => typeof name === "string")
+    .map(name => name.toLowerCase())
+    .filter(name => name !== currentName));
+  return definition.inputs
+    .filter(input =>
+      typeof input?.name === "string" &&
+      !existingNames.has(input.name.toLowerCase())
+    )
+    .map(input => ({
+      label: input.name,
+      insertText: input.name,
+      kind: "property",
+      detail: input.required ? "Required task input" : "Task input",
+      documentation: input.helpMarkDown || undefined
+    }));
+}
+
+function getTaskInputDiagnostics(text, definitions) {
+  const diagnostics = [];
+  for (const step of getTaskSteps(text)) {
+    const reference = step.taskPair.value.value;
+    const definition = taskDefinitionForReference(reference, definitions);
+    if (!definition || !Array.isArray(definition.inputs)) {
+      continue;
+    }
+    const inputMap = step.inputsPair?.value;
+    const inputPairs = Array.isArray(inputMap?.items) ? inputMap.items : [];
+    const hasDynamicInputs =
+      (typeof inputMap?.value === "string" && inputMap.value.includes("${{")) ||
+      inputPairs.some(pair => typeof pair?.key?.value === "string" && pair.key.value.includes("$"));
+    const inputsByName = new Map();
+    for (const input of definition.inputs) {
+      if (typeof input?.name !== "string") {
+        continue;
+      }
+      inputsByName.set(input.name.toLowerCase(), input);
+      for (const alias of Array.isArray(input.aliases) ? input.aliases : []) {
+        if (typeof alias === "string") {
+          inputsByName.set(alias.toLowerCase(), input);
+        }
+      }
+    }
+    const suppliedNames = new Set();
+    for (const pair of inputPairs) {
+      const name = pair?.key?.value;
+      if (typeof name !== "string" || name.includes("$")) {
+        continue;
+      }
+      const input = inputsByName.get(name.toLowerCase());
+      if (!input) {
+        if (Array.isArray(pair.key.range)) {
+          diagnostics.push({
+            start: pair.key.range[0],
+            end: pair.key.range[1],
+            message: `Unknown input "${name}" for ${reference}.`
+          });
+        }
+        continue;
+      }
+      suppliedNames.add(input.name.toLowerCase());
+      const options = input.options && typeof input.options === "object"
+        ? Object.keys(input.options)
+        : [];
+      const value = pair.value?.value;
+      if (
+        options.length &&
+        (typeof value === "string" || typeof value === "number" || typeof value === "boolean") &&
+        !/[$]/.test(String(value)) &&
+        !options.some(option => String(option).toLowerCase() === String(value).toLowerCase()) &&
+        Array.isArray(pair.value?.range)
+      ) {
+        diagnostics.push({
+          start: pair.value.range[0],
+          end: pair.value.range[1],
+          message: `Invalid value "${value}" for task input "${input.name}". Expected one of: ${options.join(", ")}.`
+        });
+      }
+    }
+    for (const input of definition.inputs) {
+      if (
+        input?.required !== true ||
+        input.visibleRule ||
+        hasDynamicInputs ||
+        (input.defaultValue !== undefined && input.defaultValue !== "") ||
+        typeof input.name !== "string" ||
+        suppliedNames.has(input.name.toLowerCase())
+      ) {
+        continue;
+      }
+      diagnostics.push({
+        start: step.taskPair.value.range[0],
+        end: step.taskPair.value.range[1],
+        message: `Required task input "${input.name}" is missing for ${reference}.`
+      });
+    }
+  }
+  return diagnostics;
 }
 
 function isAzurePipelineDocument(uri, text = "") {
@@ -432,6 +702,252 @@ function getExpressionHover(text, offset) {
   return undefined;
 }
 
+function tokenizeExpression(body, baseOffset, diagnostics) {
+  const tokens = [];
+  let index = 0;
+  while (index < body.length) {
+    const character = body[index];
+    if (/\s/.test(character)) {
+      index += 1;
+      continue;
+    }
+    if (character === "'" || character === "\"") {
+      const start = index;
+      const quote = character;
+      index += 1;
+      let closed = false;
+      while (index < body.length) {
+        if (body[index] === quote) {
+          if (quote === "'" && body[index + 1] === quote) {
+            index += 2;
+          } else {
+            index += 1;
+            closed = true;
+            break;
+          }
+        } else if (quote === "\"" && body[index] === "\\" && index + 1 < body.length) {
+          index += 2;
+        } else {
+          index += 1;
+        }
+      }
+      if (!closed) {
+        diagnostics.push({
+          start: baseOffset + start,
+          end: baseOffset + body.length,
+          message: "Unclosed string literal in Azure Pipelines expression."
+        });
+      }
+      tokens.push({type: "string", value: body.slice(start, index), start, end: index});
+      continue;
+    }
+    if (/[A-Za-z_]/.test(character)) {
+      const start = index;
+      index += 1;
+      while (index < body.length && /[A-Za-z0-9_-]/.test(body[index])) {
+        index += 1;
+      }
+      tokens.push({type: "identifier", value: body.slice(start, index), start, end: index});
+      continue;
+    }
+    if (/\d/.test(character) || ((character === "-" || character === ".") && /\d/.test(body[index + 1] || ""))) {
+      const start = index;
+      const number = body.slice(index).match(/^-?(?:\d+(?:\.\d*)?|\.\d+)/)[0];
+      index += number.length;
+      tokens.push({type: "number", value: number, start, end: index});
+      continue;
+    }
+    if ("()[],.".includes(character)) {
+      tokens.push({type: character, value: character, start: index, end: index + 1});
+      index += 1;
+      continue;
+    }
+    tokens.push({type: "invalid", value: character, start: index, end: index + 1});
+    index += 1;
+  }
+  return tokens;
+}
+
+function parseExpressionBody(body, baseOffset) {
+  const diagnostics = [];
+  const tokens = tokenizeExpression(body, baseOffset, diagnostics);
+  let index = 0;
+  const peek = () => tokens[index];
+  const report = (message, token = peek()) => {
+    const start = token ? token.start : body.length;
+    const end = token ? token.end : body.length;
+    diagnostics.push({start: baseOffset + start, end: baseOffset + end, message});
+  };
+  const reportUnknownFunction = token => {
+    const known = EXPRESSION_FUNCTIONS.some(
+      fn => fn.name.toLowerCase() === token.value.toLowerCase()
+    );
+    if (!known) {
+      diagnostics.push({
+        start: baseOffset + token.start,
+        end: baseOffset + token.end,
+        message: `Unknown Azure Pipelines expression function "${token.value}".`
+      });
+    }
+  };
+  const synchronize = closing => {
+    while (peek() && peek().type !== "," && peek().type !== closing) {
+      index += 1;
+    }
+  };
+  let parseExpression;
+  const parsePostfix = () => {
+    while (peek()) {
+      if (peek().type === ".") {
+        index += 1;
+        if (peek()?.type === "identifier") {
+          index += 1;
+        } else {
+          report("Expected a property name after '.'.");
+          return;
+        }
+      } else if (peek().type === "[") {
+        index += 1;
+        if (peek()?.type === "]") {
+          report("Expected an index expression.");
+          index += 1;
+          continue;
+        }
+        parseExpression();
+        if (peek()?.type === "]") {
+          index += 1;
+        } else {
+          report("Expected ']' to close the index expression.");
+          return;
+        }
+      } else {
+        return;
+      }
+    }
+  };
+  const parseCallArguments = () => {
+    if (peek()?.type === ")") {
+      index += 1;
+      return;
+    }
+    while (peek()) {
+      if (peek().type === "," || peek().type === ")") {
+        report("Expected an expression argument.");
+        if (peek().type === ")") {
+          index += 1;
+          return;
+        }
+        index += 1;
+        continue;
+      }
+      parseExpression();
+      if (peek()?.type === ",") {
+        index += 1;
+        if (peek()?.type === ")") {
+          report("Expected an expression argument.");
+          index += 1;
+          return;
+        }
+        continue;
+      }
+      if (peek()?.type === ")") {
+        index += 1;
+        return;
+      }
+      if (!peek()) {
+        report("Expected ')' to close the function call.");
+        return;
+      }
+      report("Expected ',' or ')' after the function argument.");
+      synchronize(")");
+      if (peek()?.type === ",") {
+        index += 1;
+      } else if (peek()?.type === ")") {
+        index += 1;
+        return;
+      }
+    }
+    report("Expected ')' to close the function call.");
+  };
+  parseExpression = () => {
+    const token = peek();
+    if (!token) {
+      report("Expected an expression.");
+      return;
+    }
+    if (token.type === "identifier") {
+      index += 1;
+      const keyword = token.value.toLowerCase();
+      if ((keyword === "if" || keyword === "elseif") && peek()?.type !== "(") {
+        if (!peek()) {
+          report(`Expected an expression after "${token.value}".`, token);
+        } else {
+          parseExpression();
+        }
+        return;
+      }
+      if (keyword === "each") {
+        if (peek()?.type !== "identifier") {
+          report("Expected an iteration variable after 'each'.");
+          return;
+        }
+        index += 1;
+        if (peek()?.type !== "identifier" || peek().value.toLowerCase() !== "in") {
+          report("Expected 'in' after the iteration variable.");
+          return;
+        }
+        index += 1;
+        parseExpression();
+        return;
+      }
+      if (peek()?.type === "(") {
+        reportUnknownFunction(token);
+        index += 1;
+        parseCallArguments();
+      }
+      parsePostfix();
+      return;
+    }
+    if (token.type === "string" || token.type === "number") {
+      index += 1;
+      parsePostfix();
+      return;
+    }
+    if (token.type === "(") {
+      index += 1;
+      if (peek()?.type === ")") {
+        report("Expected an expression inside parentheses.");
+        index += 1;
+        return;
+      }
+      parseExpression();
+      if (peek()?.type === ")") {
+        index += 1;
+      } else {
+        report("Expected ')' to close the parenthesized expression.");
+      }
+      parsePostfix();
+      return;
+    }
+    if (token.type === "invalid") {
+      report(`Unexpected character "${token.value}" in Azure Pipelines expression.`, token);
+    } else {
+      report(`Unexpected token "${token.value}" in Azure Pipelines expression.`, token);
+    }
+    index += 1;
+  };
+  if (!tokens.length) {
+    report("Expected an Azure Pipelines expression.");
+    return diagnostics;
+  }
+  parseExpression();
+  while (peek()) {
+    report(`Unexpected token "${peek().value}" in Azure Pipelines expression.`);
+    index += 1;
+  }
+  return diagnostics;
+}
+
 function getExpressionDiagnostics(text) {
   const diagnostics = [];
   const openers = [["${{", "}}"], ["$[", "]"]];
@@ -449,23 +965,51 @@ function getExpressionDiagnostics(text) {
         break;
       }
       const body = text.slice(bodyStart, end);
-      const calls = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
-      calls.lastIndex = 0;
-      const executableBody = maskStringLiterals(body);
-      let match;
-      while ((match = calls.exec(executableBody))) {
-        if (!FUNCTION_MAP.has(match[1])) {
-          const functionStart = bodyStart + match.index;
-          diagnostics.push({
-            start: functionStart,
-            end: functionStart + match[1].length,
-            message: `Unknown Azure Pipelines expression function "${match[1]}".`
-          });
-        }
-      }
+      diagnostics.push(...parseExpressionBody(body, bodyStart));
       searchFrom = end + close.length;
     }
   }
+  let yamlDocument;
+  try {
+    yamlDocument = YAML.parseDocument(text, {uniqueKeys: false});
+  } catch {
+    return diagnostics;
+  }
+  const visitConditions = node => {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    if (Array.isArray(node.items)) {
+      node.items.forEach(visitConditions);
+      return;
+    }
+    if (node.key?.value === "condition" && typeof node.value?.value === "string") {
+      const scalar = node.value;
+      if (
+        !Array.isArray(scalar.range) ||
+        scalar.type === "BLOCK_LITERAL" ||
+        scalar.type === "BLOCK_FOLDED" ||
+        /\$\{\{|\$\[|\$\(/.test(scalar.value)
+      ) {
+        return;
+      }
+      const body = scalar.value.trim();
+      if (!body) {
+        return;
+      }
+      const quoteOffset = String(scalar.type || "").startsWith("QUOTE_") ? 1 : 0;
+      const leadingWhitespace = scalar.value.length - scalar.value.trimStart().length;
+      diagnostics.push(...parseExpressionBody(
+        body,
+        scalar.range[0] + quoteOffset + leadingWhitespace
+      ));
+    }
+    if (node.key) {
+      visitConditions(node.key);
+      visitConditions(node.value);
+    }
+  };
+  visitConditions(yamlDocument.contents);
   return diagnostics;
 }
 
@@ -474,10 +1018,15 @@ module.exports = {
   getExpressionCompletions,
   getExpressionDiagnostics,
   getExpressionHover,
+  getTemplateReferenceAt,
+  getTaskInputCompletions,
+  getTaskInputDiagnostics,
+  isTaskInputCompletionPosition,
   isAzurePipelineDocument,
   getParameterDefinitions,
   parameterPromptKind,
   parsePipelineYaml,
   pipelineNames,
+  resolveTemplatePaths,
   typedParameterValue
 };

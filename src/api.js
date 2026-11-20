@@ -164,6 +164,10 @@ class AzureDevOpsApi {
     return this.request(this.organizationUrl("distributedtask/yamlschema"));
   }
 
+  listTaskDefinitions() {
+    return this.request(this.organizationUrl("distributedtask/tasks"));
+  }
+
   getBuildTimeline(runId, timelineId) {
     const timeline = timelineId ? `/timeline/${encodeURIComponent(timelineId)}` : "/timeline";
     return this.request(this.projectUrl(`build/builds/${encodeURIComponent(runId)}${timeline}`));
