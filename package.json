@@ -127,8 +127,18 @@
         "category": "Azure Pipelines"
       },
       {
+        "command": "azure-pipelines.togglePipelineQueue",
+        "title": "Pause / Resume Pipeline",
+        "category": "Azure Pipelines"
+      },
+      {
         "command": "azure-pipelines.cancelRun",
         "title": "Cancel Run",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.deleteRun",
+        "title": "Delete Run",
         "category": "Azure Pipelines"
       },
       {
@@ -263,6 +273,10 @@
           "when": "viewItem == azurePipeline || viewItem == azurePipelinePinned"
         },
         {
+          "command": "azure-pipelines.togglePipelineQueue",
+          "when": "viewItem == azurePipeline || viewItem == azurePipelinePinned"
+        },
+        {
           "command": "azure-pipelines.openDefinition",
           "when": "viewItem == azurePipeline || viewItem == azurePipelinePinned"
         },
@@ -303,6 +317,10 @@
           "group": "inline",
           "icon": "$(stop-circle)",
           "when": "viewItem == azurePipelineRunActive"
+        },
+        {
+          "command": "azure-pipelines.deleteRun",
+          "when": "viewItem == azurePipelineRunCompleted"
         },
         {
           "command": "azure-pipelines.retryRun",

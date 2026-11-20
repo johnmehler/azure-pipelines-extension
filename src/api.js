@@ -178,6 +178,14 @@ class AzureDevOpsApi {
     });
   }
 
+  async setPipelineQueueStatus(pipelineId, queueStatus, currentDefinition) {
+    if (!["enabled", "paused"].includes(queueStatus)) {
+      throw new Error("Pipeline queue status must be enabled or paused.");
+    }
+    const definition = currentDefinition || await this.getBuildDefinition(pipelineId);
+    return this.updateBuildDefinition({...definition, queueStatus});
+  }
+
   async getProject() {
     if (!this.projectDetails) {
       this.projectDetails = await this.request(
@@ -410,6 +418,12 @@ class AzureDevOpsApi {
     return this.request(this.projectUrl(`build/builds/${encodeURIComponent(runId)}`), {
       method: "PATCH",
       body: {id: Number(runId), status: "cancelling"}
+    });
+  }
+
+  deleteRun(runId) {
+    return this.request(this.projectUrl(`build/builds/${encodeURIComponent(runId)}`), {
+      method: "DELETE"
     });
   }
 

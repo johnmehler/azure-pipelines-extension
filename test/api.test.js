@@ -279,6 +279,43 @@ test("cancel and retry use Azure DevOps build update operations", async () => {
   assert.deepEqual(JSON.parse(requests[1].options.body), {id: 13});
 });
 
+test("pipeline pause and resume preserve the full build definition", async () => {
+  const requests = [];
+  const api = createApi(async (url, options) => {
+    requests.push({url: new URL(url), options});
+    return {
+      ok: true,
+      text: async () => requests.length === 1
+        ? '{"id":14,"name":"CI","revision":4,"queueStatus":"enabled"}'
+        : "{}"
+    };
+  });
+
+  await api.setPipelineQueueStatus(14, "paused");
+
+  assert.match(requests[0].url.pathname, /build\/definitions\/14$/);
+  assert.equal(requests[0].options.method, "GET");
+  assert.equal(requests[1].options.method, "PUT");
+  assert.deepEqual(JSON.parse(requests[1].options.body), {
+    id: 14,
+    name: "CI",
+    revision: 4,
+    queueStatus: "paused"
+  });
+});
+
+test("runs can be deleted through the build API", async () => {
+  let request;
+  const api = createApi(async (_url, options) => {
+    request = options;
+    return {ok: true, text: async () => ""};
+  });
+
+  await api.deleteRun(12);
+
+  assert.equal(request.method, "DELETE");
+});
+
 test("stage retries and approval decisions use Azure DevOps update APIs", async () => {
   const requests = [];
   const api = createApi(async (url, options) => {

@@ -44,13 +44,15 @@ const vscode = {
 const originalLoad = Module._load;
 let LibraryProvider;
 let PipelineProvider;
+let formatDuration;
+let recordNode;
 Module._load = function(request, parent, isMain) {
   return request === "vscode"
     ? vscode
     : originalLoad.call(this, request, parent, isMain);
 };
 try {
-  ({LibraryProvider, PipelineProvider} = require("../src/providers"));
+  ({LibraryProvider, PipelineProvider, formatDuration, recordNode} = require("../src/providers"));
 } finally {
   Module._load = originalLoad;
 }
@@ -189,6 +191,37 @@ test("stage and job timeline items expose stage retry context", async () => {
   assert.equal(stage.contextValue, "azurePipelineStageRetry");
   assert.equal(job.contextValue, "azurePipelineJobRetry");
   assert.equal(job.stageRefName, "Deploy");
+});
+
+test("timeline records show their completed durations", () => {
+  const pipeline = {id: 4, name: "CI"};
+  const run = {id: 10};
+  const item = recordNode({
+    id: "job",
+    name: "Build",
+    type: "Job",
+    state: "completed",
+    startTime: "2026-11-20T12:00:00.000Z",
+    finishTime: "2026-11-20T13:02:05.000Z"
+  }, false, run, pipeline);
+
+  assert.equal(item.description, "completed - 1h 2m 5s");
+  assert.equal(formatDuration(
+    "2026-11-20T12:00:00.000Z",
+    "2026-11-20T12:00:45.000Z"
+  ), "45s");
+  assert.equal(formatDuration(
+    "2026-11-20T12:00:00.000Z",
+    "2026-11-20T13:02:05.000Z"
+  ), "1h 2m 5s");
+  assert.equal(formatDuration("invalid", "2026-11-20T12:00:45.000Z"), undefined);
+  const missingFinish = recordNode({
+    id: "done",
+    type: "Job",
+    state: "completed",
+    startTime: "2026-11-20T12:00:00.000Z"
+  }, false, run, pipeline);
+  assert.equal(missingFinish.description, "completed");
 });
 
 test("artifact roots load artifacts and retain run arguments", async () => {

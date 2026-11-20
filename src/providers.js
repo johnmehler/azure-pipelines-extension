@@ -52,6 +52,35 @@ function runLabel(run) {
   return `#${run.id} ${name} - ${status}`;
 }
 
+function formatDuration(startTime, finishTime, now = Date.now()) {
+  const start = Date.parse(startTime);
+  const end = finishTime ? Date.parse(finishTime) : now;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+    return undefined;
+  }
+
+  const totalSeconds = Math.floor((end - start) / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [
+    hours ? `${hours}h` : "",
+    minutes ? `${minutes}m` : "",
+    seconds ? `${seconds}s` : ""
+  ].filter(Boolean).join(" ") || "0s";
+}
+
+function recordDuration(record, now) {
+  if (!record.startTime || (!record.finishTime && String(record.state).toLowerCase() === "completed")) {
+    return "";
+  }
+  const duration = formatDuration(record.startTime, record.finishTime, now);
+  if (!duration) {
+    return "";
+  }
+  return `${duration}${record.finishTime ? "" : " elapsed"}`;
+}
+
 function pipelineNode(pipeline, pinnedIds = new Set(), workspaceFolder) {
   const pinned = pinnedIds.has(Number(pipeline.id));
   const workspaceKey = workspaceFolder?.uri.toString() || "";
@@ -121,6 +150,7 @@ function recordNode(record, hasChildren, run, pipeline, timelineId, workspaceFol
         : "azurePipelineTimelineRecord";
   item.description = [
     record.result || record.state || record.currentOperation,
+    recordDuration(record),
     record.attempt > 1 ? `Attempt ${record.attempt}` : ""
   ].filter(Boolean).join(" - ");
   item.iconPath = statusIcon({state: record.state, result: record.result});
@@ -810,5 +840,7 @@ module.exports = {
   LibraryProvider,
   PipelineProvider,
   informationNode,
-  responseItems
+  responseItems,
+  recordNode,
+  formatDuration
 };

@@ -1501,6 +1501,62 @@ function activate(context) {
     }
   });
 
+  register("azure-pipelines.deleteRun", async argument => {
+    const run = getRunArgument(argument);
+    if (!run) {
+      return;
+    }
+    const answer = await vscode.window.showWarningMessage(
+      `Delete completed Azure Pipelines run #${run.id}? This cannot be undone.`,
+      {modal: true},
+      "Delete Run"
+    );
+    if (answer !== "Delete Run") {
+      return;
+    }
+    try {
+      const api = await getApi(true, argument?.pipeline?.workspaceFolder);
+      if (api) {
+        await api.deleteRun(run.id);
+        refreshAll();
+      }
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not delete run: ${error.message}`);
+    }
+  });
+
+  register("azure-pipelines.togglePipelineQueue", async argument => {
+    const pipeline = getPipelineArgument(argument);
+    if (!pipeline?.id) {
+      return;
+    }
+    try {
+      const api = await getApi(true, pipeline.workspaceFolder);
+      if (!api) {
+        return;
+      }
+      const definition = await api.getBuildDefinition(pipeline.id);
+      const status = String(definition.queueStatus || "").toLowerCase();
+      const nextStatus = status === "paused" || status === "disabled" ? "enabled" : "paused";
+      const action = status === "paused" ? "Resume" : status === "disabled" ? "Enable" : "Pause";
+      const answer = await vscode.window.showWarningMessage(
+        `${action} pipeline "${pipeline.name || definition.name}"?`,
+        {modal: true},
+        `${action} Pipeline`
+      );
+      if (answer !== `${action} Pipeline`) {
+        return;
+      }
+      await api.setPipelineQueueStatus(pipeline.id, nextStatus, definition);
+      refreshAll();
+      void vscode.window.showInformationMessage(
+        `Pipeline ${action.toLowerCase()}d.`
+      );
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not update pipeline queue status: ${error.message}`);
+    }
+  });
+
   register("azure-pipelines.retryRun", async argument => {
     const run = getRunArgument(argument);
     if (!run) {
