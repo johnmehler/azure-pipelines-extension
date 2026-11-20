@@ -68,3 +68,21 @@ test("diagnoses unclosed expressions and unknown expression functions", () => {
   assert.match(diagnostics[0].message, /Unknown/);
   assert.match(diagnostics[1].message, /Unclosed/);
 });
+
+test("runtime expressions with bracket indexing close at the outer bracket", () => {
+  assert.deepEqual(getExpressionDiagnostics("$[ variables['foo'] ]"), []);
+  assert.deepEqual(getExpressionDiagnostics("$[ variables[\"foo\"] ]"), []);
+});
+
+test("expression hovers cover the token and only activate inside expressions", () => {
+  const expression = "condition: ${{ format('hello') }}";
+  const token = expression.indexOf("format");
+  assert.match(getExpressionHover(expression, token + 2).title, /format\(/);
+  assert.equal(getExpressionHover("This word is format", 16), undefined);
+  assert.equal(getExpressionHover("${{ in }}", 5), undefined);
+  assert.match(getExpressionHover("${{ variables }}", 7).title, /variables context/);
+});
+
+test("diagnostics ignore function-like string literals and recognize xor", () => {
+  assert.deepEqual(getExpressionDiagnostics("${{ eq('foo()', xor(true, false)) }}"), []);
+});

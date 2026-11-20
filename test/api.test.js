@@ -77,6 +77,7 @@ test("current-branch build queries use the Azure DevOps branch filter", async ()
   await api.listBuildsForBranch("feature/my-branch");
   assert.equal(requestUrl.searchParams.get("branchName"), "refs/heads/feature/my-branch");
   assert.equal(requestUrl.searchParams.get("$top"), "100");
+  assert.equal(requestUrl.searchParams.get("queryOrder"), "queueTimeDescending");
 });
 
 test("environment create, update, and delete use project-scoped APIs", async () => {

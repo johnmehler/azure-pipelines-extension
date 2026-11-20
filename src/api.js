@@ -107,7 +107,7 @@ class AzureDevOpsApi {
     return this.request(this.projectUrl("build/builds", {
       branchName,
       $top: 100,
-      queryOrder: "finishTimeDescending"
+      queryOrder: "queueTimeDescending"
     }));
   }
 

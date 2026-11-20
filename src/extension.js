@@ -326,9 +326,11 @@ function activate(context) {
     }
   };
 
-  vscode.window.registerTreeDataProvider("azure-pipelines.pipelines", pipelinesProvider);
-  vscode.window.registerTreeDataProvider("azure-pipelines.currentBranch", branchProvider);
-  vscode.window.registerTreeDataProvider("azure-pipelines.settings", libraryProvider);
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider("azure-pipelines.pipelines", pipelinesProvider),
+    vscode.window.registerTreeDataProvider("azure-pipelines.currentBranch", branchProvider),
+    vscode.window.registerTreeDataProvider("azure-pipelines.settings", libraryProvider)
+  );
 
   const expressionDiagnostics = vscode.languages.createDiagnosticCollection("azure-pipelines");
   context.subscriptions.push(expressionDiagnostics);
@@ -463,12 +465,14 @@ function activate(context) {
     }
     await secretStorage.delete(PAT_SECRET_KEY);
     const settings = vscode.workspace.getConfiguration("azure-pipelines");
-    const target = vscode.workspace.workspaceFolders?.length
-      ? vscode.ConfigurationTarget.Workspace
-      : vscode.ConfigurationTarget.Global;
-    await settings.update("organization", "", target);
-    await settings.update("project", "", target);
-    await settings.update("authMethod", "pat", target);
+    const targets = vscode.workspace.workspaceFolders?.length
+      ? [vscode.ConfigurationTarget.Workspace, vscode.ConfigurationTarget.Global]
+      : [vscode.ConfigurationTarget.Global];
+    for (const target of targets) {
+      await settings.update("organization", "", target);
+      await settings.update("project", "", target);
+      await settings.update("authMethod", "pat", target);
+    }
     refreshAll();
   });
   register("azure-pipelines.refresh", refreshAll);
@@ -775,7 +779,6 @@ function activate(context) {
       const variableText = await vscode.window.showInputBox({
         title: `Run ${pipeline.name}`,
         prompt: "Optional run variables as a JSON object (leave blank to skip)",
-        password: true,
         ignoreFocusOut: true
       });
       if (variableText === undefined) {
@@ -1205,12 +1208,26 @@ function activate(context) {
     void vscode.window.showInformationMessage("Copied variable value.");
   });
 
-  const interval = vscode.workspace.getConfiguration("azure-pipelines").get("refreshInterval", 60);
   let refreshTimer;
-  if (interval > 0) {
-    refreshTimer = setInterval(refreshAll, Math.max(30, interval) * 1000);
-    context.subscriptions.push({dispose: () => clearInterval(refreshTimer)});
-  }
+  const configureRefreshTimer = () => {
+    if (refreshTimer) {
+      clearInterval(refreshTimer);
+      refreshTimer = undefined;
+    }
+    const interval = vscode.workspace.getConfiguration("azure-pipelines").get("refreshInterval", 60);
+    if (interval > 0) {
+      refreshTimer = setInterval(refreshAll, Math.max(30, interval) * 1000);
+    }
+  };
+  configureRefreshTimer();
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration(event => {
+      if (event.affectsConfiguration("azure-pipelines.refreshInterval")) {
+        configureRefreshTimer();
+      }
+    }),
+    {dispose: () => clearInterval(refreshTimer)}
+  );
 
   context.subscriptions.push({dispose: () => {
     pipelinesProvider.onDidChangeTreeDataEmitter.dispose();

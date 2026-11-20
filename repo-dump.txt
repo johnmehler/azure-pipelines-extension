@@ -1,0 +1,2682 @@
+﻿=== C:\Users\johnm\Documents\Technology\azdo-extension\package.json ===
+{
+  "name": "azure-devops-pipelines",
+  "displayName": "Azure DevOps Pipelines",
+  "description": "Browse, run, and inspect Azure DevOps pipelines from VS Code.",
+  "version": "0.1.0",
+  "publisher": "JohnMehler",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other",
+    "Programming Languages"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:yaml",
+    "onLanguage:azure-pipelines"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check src/api.js && node --check src/helpers.js && node --check src/yamlSupport.js && node --check src/providers.js && node --check src/extension.js",
+    "build": "esbuild ./src/extension.js --bundle --platform=node --target=node18 --external:vscode --outfile=dist/extension.js",
+    "vscode:prepublish": "npm run check && npm run build && npm test"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "azure-pipelines",
+          "title": "Azure Pipelines",
+          "icon": "media/azure-pipelines.svg"
+        }
+      ]
+    },
+    "views": {
+      "azure-pipelines": [
+        {
+          "id": "azure-pipelines.pipelines",
+          "name": "Pipelines"
+        },
+        {
+          "id": "azure-pipelines.currentBranch",
+          "name": "Current Branch"
+        },
+        {
+          "id": "azure-pipelines.settings",
+          "name": "Library"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "azure-pipelines.configure",
+        "title": "Configure Azure DevOps Connection",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.disconnect",
+        "title": "Disconnect Azure DevOps",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.refreshSchema",
+        "title": "Download Organization YAML Schema",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.showPinned",
+        "title": "Show Pinned Pipelines",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.refresh",
+        "title": "Refresh",
+        "category": "Azure Pipelines",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "azure-pipelines.openRun",
+        "title": "Open Run in Browser",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.openDefinition",
+        "title": "Open Pipeline YAML",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.openEnvironment",
+        "title": "Open Environment in Browser",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.addEnvironment",
+        "title": "Create Environment",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.updateEnvironment",
+        "title": "Edit Environment",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.deleteEnvironment",
+        "title": "Delete Environment",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.addVariableGroup",
+        "title": "Create Variable Group",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.updateVariableGroup",
+        "title": "Rename Variable Group",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.deleteVariableGroup",
+        "title": "Delete Variable Group",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.queuePipeline",
+        "title": "Run Pipeline",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.cancelRun",
+        "title": "Cancel Run",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.retryRun",
+        "title": "Retry Run",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.openLogs",
+        "title": "Open Logs",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.openLogsInBrowser",
+        "title": "Open Step in Browser",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.pinPipeline",
+        "title": "Pin Pipeline",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.unpinPipeline",
+        "title": "Unpin Pipeline",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.addVariable",
+        "title": "Add Library Variable",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.updateVariable",
+        "title": "Update Library Variable",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.deleteVariable",
+        "title": "Delete Library Variable",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.copyVariable",
+        "title": "Copy Variable Name",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.copyVariableValue",
+        "title": "Copy Variable Value",
+        "category": "Azure Pipelines"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "azure-pipelines.refresh",
+          "icon": "$(refresh)",
+          "group": "navigation",
+          "when": "view == azure-pipelines.pipelines || view == azure-pipelines.currentBranch || view == azure-pipelines.settings"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "azure-pipelines.queuePipeline",
+          "when": "viewItem == azurePipeline || viewItem == azurePipelinePinned"
+        },
+        {
+          "command": "azure-pipelines.queuePipeline",
+          "group": "inline",
+          "icon": "$(play)",
+          "when": "viewItem == azurePipeline || viewItem == azurePipelinePinned"
+        },
+        {
+          "command": "azure-pipelines.openDefinition",
+          "when": "viewItem == azurePipeline || viewItem == azurePipelinePinned"
+        },
+        {
+          "command": "azure-pipelines.openEnvironment",
+          "when": "viewItem == azureEnvironment"
+        },
+        {
+          "command": "azure-pipelines.addEnvironment",
+          "when": "viewItem == azureEnvironments"
+        },
+        {
+          "command": "azure-pipelines.updateEnvironment",
+          "when": "viewItem == azureEnvironment"
+        },
+        {
+          "command": "azure-pipelines.deleteEnvironment",
+          "when": "viewItem == azureEnvironment"
+        },
+        {
+          "command": "azure-pipelines.pinPipeline",
+          "when": "viewItem == azurePipeline"
+        },
+        {
+          "command": "azure-pipelines.unpinPipeline",
+          "when": "viewItem == azurePipelinePinned"
+        },
+        {
+          "command": "azure-pipelines.openRun",
+          "when": "viewItem =~ /azurePipelineRun/"
+        },
+        {
+          "command": "azure-pipelines.cancelRun",
+          "when": "viewItem == azurePipelineRunActive"
+        },
+        {
+          "command": "azure-pipelines.cancelRun",
+          "group": "inline",
+          "icon": "$(stop-circle)",
+          "when": "viewItem == azurePipelineRunActive"
+        },
+        {
+          "command": "azure-pipelines.retryRun",
+          "when": "viewItem == azurePipelineRunCompleted"
+        },
+        {
+          "command": "azure-pipelines.openLogs",
+          "when": "viewItem == azurePipelineLog"
+        },
+        {
+          "command": "azure-pipelines.openLogs",
+          "group": "inline",
+          "icon": "$(output)",
+          "when": "viewItem == azurePipelineLog"
+        },
+        {
+          "command": "azure-pipelines.openLogsInBrowser",
+          "when": "viewItem == azurePipelineLog"
+        },
+        {
+          "command": "azure-pipelines.addVariable",
+          "when": "viewItem == azureVariableGroup"
+        },
+        {
+          "command": "azure-pipelines.updateVariableGroup",
+          "when": "viewItem == azureVariableGroup"
+        },
+        {
+          "command": "azure-pipelines.deleteVariableGroup",
+          "when": "viewItem == azureVariableGroup"
+        },
+        {
+          "command": "azure-pipelines.addVariableGroup",
+          "when": "viewItem == azureVariableGroups"
+        },
+        {
+          "command": "azure-pipelines.updateVariable",
+          "when": "viewItem =~ /azureLibraryVariable/"
+        },
+        {
+          "command": "azure-pipelines.deleteVariable",
+          "when": "viewItem =~ /azureLibraryVariable/"
+        },
+        {
+          "command": "azure-pipelines.copyVariable",
+          "when": "viewItem =~ /azureLibraryVariable/"
+        },
+        {
+          "command": "azure-pipelines.copyVariableValue",
+          "when": "viewItem == azureLibraryVariable"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Azure Pipelines",
+      "properties": {
+        "azure-pipelines.organization": {
+          "type": "string",
+          "default": "",
+          "description": "Azure DevOps organization name (the segment in https://dev.azure.com/{organization})."
+        },
+        "azure-pipelines.project": {
+          "type": "string",
+          "default": "",
+          "description": "Azure DevOps project name or ID."
+        },
+        "azure-pipelines.authMethod": {
+          "type": "string",
+          "enum": [
+            "microsoft",
+            "pat"
+          ],
+          "default": "pat",
+          "description": "Authentication method for Azure DevOps REST API requests."
+        },
+        "azure-pipelines.refreshInterval": {
+          "type": "number",
+          "default": 60,
+          "minimum": 0,
+          "description": "Automatic refresh interval in seconds (minimum 30). Set to 0 to disable polling."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "json.schemas": [
+        {
+          "url": "https://raw.githubusercontent.com/Microsoft/azure-pipelines-task-lib/master/tasks.schema.json",
+          "fileMatch": [
+            "task.json",
+            "**/task.json"
+          ]
+        }
+      ],
+      "yaml.schemas": {
+        "https://raw.githubusercontent.com/microsoft/azure-pipelines-vscode/main/service-schema.json": [
+          "azure-pipelines.yml",
+          "azure-pipelines.yaml",
+          "**/azure-pipelines.yml",
+          "**/azure-pipelines.yaml",
+          ".azure-pipelines/**/*.yml",
+          ".azure-pipelines/**/*.yaml",
+          "**/.azure-pipelines/**/*.yml",
+          "**/.azure-pipelines/**/*.yaml",
+          "**/azure-pipelines/**/*.yml",
+          "**/azure-pipelines/**/*.yaml",
+          "**/.pipelines/**/*.yml",
+          "**/.pipelines/**/*.yaml",
+          "vsts-ci.yml",
+          "vsts-ci.yaml",
+          ".vsts-ci.yml",
+          ".vsts-ci.yaml",
+          "**/*.azure-pipelines.yml",
+          "**/*.azure-pipelines.yaml"
+        ]
+      }
+    },
+    "grammars": [
+      {
+        "scopeName": "source.azure-pipelines.expressions",
+        "path": "./syntaxes/azure-pipelines-expressions.tmLanguage.json",
+        "injectTo": [
+          "source.yaml"
+        ]
+      }
+    ]
+  },
+  "extensionDependencies": [
+    "redhat.vscode-yaml"
+  ],
+  "dependencies": {
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}
+
+=== C:\Users\johnm\Documents\Technology\azdo-extension\src\api.js ===
+"use strict";
+
+const API_VERSION = "7.1";
+
+class AzureDevOpsApi {
+  constructor({organization, project, token, authType = "pat", fetchImpl = globalThis.fetch}) {
+    if (!organization || !project || !token) {
+      throw new Error("Azure DevOps organization, project, and an access token are required.");
+    }
+    if (typeof fetchImpl !== "function") {
+      throw new Error("This VS Code runtime does not provide fetch().");
+    }
+
+    this.organization = organization.trim();
+    this.project = project.trim();
+    this.token = token;
+    this.authType = authType;
+    this.fetch = fetchImpl;
+    this.projectDetails = undefined;
+    this.resolvedProjectId = undefined;
+  }
+
+  projectUrl(route, query = {}) {
+    const base = `https://dev.azure.com/${encodeURIComponent(this.organization)}/${encodeURIComponent(this.project)}/_apis/${route}`;
+    return this.withQuery(base, query);
+  }
+
+  organizationUrl(route, query = {}) {
+    const base = `https://dev.azure.com/${encodeURIComponent(this.organization)}/_apis/${route}`;
+    return this.withQuery(base, query);
+  }
+
+  withQuery(base, query) {
+    const url = new URL(base);
+    for (const [key, value] of Object.entries({...query, "api-version": API_VERSION})) {
+      if (value !== undefined && value !== null && value !== "") {
+        url.searchParams.set(key, String(value));
+      }
+    }
+    return url.toString();
+  }
+
+  async request(url, {method = "GET", body, accept = "application/json"} = {}) {
+    const headers = {Accept: accept};
+    headers.Authorization = this.authType === "bearer"
+      ? `Bearer ${this.token}`
+      : `Basic ${Buffer.from(`:${this.token}`).toString("base64")}`;
+    if (body !== undefined) {
+      headers["Content-Type"] = "application/json";
+    }
+
+    const response = await this.fetch(url, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body)
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      let detail = text;
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed.message || parsed.typeKey || text;
+      } catch {
+        // Keep the raw response when Azure DevOps does not return JSON.
+      }
+      throw new Error(`Azure DevOps returned ${response.status}: ${detail || response.statusText}`);
+    }
+    if (!text) {
+      return null;
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  }
+
+  listPipelines() {
+    return this.request(this.projectUrl("pipelines", {$top: 200}));
+  }
+
+  async getProject() {
+    if (!this.projectDetails) {
+      this.projectDetails = await this.request(
+        this.organizationUrl(`projects/${encodeURIComponent(this.project)}`)
+      );
+      this.resolvedProjectId = this.projectDetails.id;
+    }
+    return this.projectDetails;
+  }
+
+  async getProjectId() {
+    await this.getProject();
+    return this.resolvedProjectId;
+  }
+
+  getPipeline(pipelineId) {
+    return this.request(this.projectUrl(`pipelines/${encodeURIComponent(pipelineId)}`));
+  }
+
+  listRuns(pipelineId) {
+    return this.request(this.projectUrl(`pipelines/${encodeURIComponent(pipelineId)}/runs`));
+  }
+
+  listBuildsForBranch(branch) {
+    const branchName = branch.startsWith("refs/") ? branch : `refs/heads/${branch}`;
+    return this.request(this.projectUrl("build/builds", {
+      branchName,
+      $top: 100,
+      queryOrder: "finishTimeDescending"
+    }));
+  }
+
+  runPipeline(pipelineId, {branch, templateParameters, variables} = {}) {
+    const body = {
+      resources: branch
+        ? {repositories: {self: {refName: branch.startsWith("refs/") ? branch : `refs/heads/${branch}`}}}
+        : undefined,
+      templateParameters: templateParameters || undefined,
+      variables: variables || undefined
+    };
+    return this.request(this.projectUrl(`pipelines/${encodeURIComponent(pipelineId)}/runs`), {
+      method: "POST",
+      body
+    });
+  }
+
+  listPipelineLogs(pipelineId, runId) {
+    return this.request(this.projectUrl(
+      `pipelines/${encodeURIComponent(pipelineId)}/runs/${encodeURIComponent(runId)}/logs`
+    ));
+  }
+
+  async getPipelineLog(pipelineId, runId, logId) {
+    const response = await this.request(this.projectUrl(
+      `pipelines/${encodeURIComponent(pipelineId)}/runs/${encodeURIComponent(runId)}/logs/${encodeURIComponent(logId)}`,
+      {$expand: "signedContent"}
+    ), {accept: "text/plain"});
+    if (typeof response !== "object" || response === null) {
+      return response;
+    }
+    const signedContent = response.signedContent;
+    const signedUrl = typeof signedContent === "string"
+      ? signedContent
+      : signedContent?.url || response.url;
+    if (signedUrl) {
+      const url = new URL(signedUrl);
+      if (url.protocol !== "https:") {
+        throw new Error("Azure DevOps returned a non-HTTPS log URL.");
+      }
+      const result = await this.fetch(url, {headers: {Accept: "text/plain"}});
+      if (!result.ok) {
+        throw new Error(`Could not download the log content (${result.status}).`);
+      }
+      return result.text();
+    }
+    if (typeof signedContent?.content === "string") {
+      return signedContent.content;
+    }
+    return response;
+  }
+
+  getYamlSchema() {
+    return this.request(this.organizationUrl("distributedtask/yamlschema"));
+  }
+
+  getBuildTimeline(runId, timelineId) {
+    const timeline = timelineId ? `/timeline/${encodeURIComponent(timelineId)}` : "/timeline";
+    return this.request(this.projectUrl(`build/builds/${encodeURIComponent(runId)}${timeline}`));
+  }
+
+  getBuildLog(runId, logId) {
+    return this.request(this.projectUrl(
+      `build/builds/${encodeURIComponent(runId)}/logs/${encodeURIComponent(logId)}`
+    ), {accept: "text/plain"});
+  }
+
+  cancelRun(runId) {
+    return this.request(this.projectUrl(`build/builds/${encodeURIComponent(runId)}`), {
+      method: "PATCH",
+      body: {id: Number(runId), status: "cancelling"}
+    });
+  }
+
+  retryRun(runId) {
+    return this.request(this.projectUrl(`build/builds/${encodeURIComponent(runId)}`, {retry: true}), {
+      method: "PATCH",
+      body: {id: Number(runId)}
+    });
+  }
+
+  listEnvironments() {
+    return this.request(this.projectUrl("distributedtask/environments"));
+  }
+
+  createEnvironment(environment) {
+    return this.request(this.projectUrl("distributedtask/environments"), {
+      method: "POST",
+      body: environment
+    });
+  }
+
+  updateEnvironment(environmentId, environment) {
+    return this.request(this.projectUrl(
+      `distributedtask/environments/${encodeURIComponent(environmentId)}`
+    ), {
+      method: "PATCH",
+      body: environment
+    });
+  }
+
+  deleteEnvironment(environmentId) {
+    return this.request(this.projectUrl(
+      `distributedtask/environments/${encodeURIComponent(environmentId)}`
+    ), {method: "DELETE"});
+  }
+
+  async createVariableGroup(name, description = "") {
+    const project = await this.getProject();
+    return this.request(this.organizationUrl("distributedtask/variablegroups"), {
+      method: "POST",
+      body: {
+        name,
+        description,
+        type: "Vsts",
+        variables: {},
+        variableGroupProjectReferences: [{
+          name,
+          description,
+          projectReference: {id: project.id, name: project.name}
+        }]
+      }
+    });
+  }
+
+  async deleteVariableGroup(groupId) {
+    const projectId = await this.getProjectId();
+    return this.request(this.organizationUrl(
+      `distributedtask/variablegroups/${encodeURIComponent(groupId)}`,
+      {projectIds: projectId}
+    ), {method: "DELETE"});
+  }
+
+  async listVariableGroups() {
+    const projectId = await this.getProjectId();
+    return this.request(this.organizationUrl("distributedtask/variablegroups", {
+      projectIds: projectId
+    }));
+  }
+
+  async getVariableGroup(groupId) {
+    const projectId = await this.getProjectId();
+    return this.request(this.organizationUrl(
+      `distributedtask/variablegroups/${encodeURIComponent(groupId)}`,
+      {projectIds: projectId}
+    ));
+  }
+
+  async updateVariableGroup(group) {
+    const projectId = await this.getProjectId();
+    const {id, ...body} = group;
+    return this.request(this.organizationUrl(
+      `distributedtask/variablegroups/${encodeURIComponent(id)}`,
+      {projectIds: projectId}
+    ), {
+      method: "PUT",
+      body
+    });
+  }
+}
+
+module.exports = {API_VERSION, AzureDevOpsApi};
+
+=== C:\Users\johnm\Documents\Technology\azdo-extension\src\extension.js ===
+"use strict";
+
+const {execFile} = require("child_process");
+const {promisify} = require("util");
+const vscode = require("vscode");
+const {AzureDevOpsApi} = require("./api");
+const {normalizeVariables, parseJsonObject, webLogUrl, webRunUrl} = require("./helpers");
+const {LibraryProvider, PipelineProvider, responseItems} = require("./providers");
+const {
+  getExpressionCompletions,
+  getExpressionDiagnostics,
+  getExpressionHover,
+  getParameterDefinitions,
+  isAzurePipelineDocument,
+  parameterPromptKind,
+  typedParameterValue
+} = require("./yamlSupport");
+
+const execFileAsync = promisify(execFile);
+const PAT_SECRET_KEY = "azure-pipelines.personalAccessToken";
+const AZURE_DEVOPS_SCOPES = [
+  "499b84ac-1321-427f-aa17-267ca6975798/.default",
+  "offline_access"
+];
+
+function getPipelineArgument(argument) {
+  return argument?.pipeline || argument;
+}
+
+function getRunArgument(argument) {
+  return argument?.run;
+}
+
+async function currentGitBranch() {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) {
+    return undefined;
+  }
+  try {
+    const {stdout} = await execFileAsync("git", ["branch", "--show-current"], {
+      cwd: folder.uri.fsPath,
+      windowsHide: true,
+      timeout: 3000
+    });
+    return stdout.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function activate(context) {
+  const secretStorage = context.secrets;
+  const getConnectionValues = async () => {
+    const settings = vscode.workspace.getConfiguration("azure-pipelines");
+    const authMethod = settings.get("authMethod", "pat");
+    let token;
+    if (authMethod === "microsoft") {
+      try {
+        const session = await vscode.authentication.getSession(
+          "microsoft",
+          AZURE_DEVOPS_SCOPES,
+          {createIfNone: false}
+        );
+        token = session?.accessToken;
+      } catch {
+        token = undefined;
+      }
+    } else {
+      token = await secretStorage.get(PAT_SECRET_KEY);
+    }
+    return {
+      organization: settings.get("organization", "").trim(),
+      project: settings.get("project", "").trim(),
+      token,
+      authMethod,
+      authType: authMethod === "microsoft" ? "bearer" : "pat"
+    };
+  };
+
+  let configuring;
+  const configureConnection = async () => {
+    if (configuring) {
+      return configuring;
+    }
+    configuring = (async () => {
+      const values = await getConnectionValues();
+      const organization = await vscode.window.showInputBox({
+        title: "Azure DevOps connection",
+        prompt: "Organization name from https://dev.azure.com/{organization}",
+        value: values.organization,
+        ignoreFocusOut: true
+      });
+      if (!organization?.trim()) {
+        return false;
+      }
+      const project = await vscode.window.showInputBox({
+        title: "Azure DevOps connection",
+        prompt: "Project name or ID",
+        value: values.project,
+        ignoreFocusOut: true
+      });
+      if (!project?.trim()) {
+        return false;
+      }
+      const selectedAuth = await vscode.window.showQuickPick([
+        {label: "Microsoft account sign-in", description: "Recommended; token is managed by VS Code", value: "microsoft"},
+        {label: "Personal access token", description: "Stored in VS Code SecretStorage", value: "pat"}
+      ], {placeHolder: "Choose Azure DevOps authentication"});
+      if (!selectedAuth) {
+        return false;
+      }
+      let token;
+      if (selectedAuth.value === "microsoft") {
+        try {
+          const session = await vscode.authentication.getSession(
+            "microsoft",
+            AZURE_DEVOPS_SCOPES,
+            {createIfNone: true}
+          );
+          token = session?.accessToken;
+        } catch (error) {
+          void vscode.window.showErrorMessage(`Microsoft sign-in failed: ${error.message}`);
+          return false;
+        }
+        if (!token) {
+          return false;
+        }
+      } else {
+        const savedPat = await secretStorage.get(PAT_SECRET_KEY);
+        const enteredPat = await vscode.window.showInputBox({
+          title: "Azure DevOps connection",
+          prompt: "Personal access token (stored in VS Code SecretStorage)",
+          value: "",
+          password: true,
+          ignoreFocusOut: true
+        });
+        if (enteredPat === undefined || (!enteredPat.trim() && !savedPat)) {
+          return false;
+        }
+        token = enteredPat.trim() || savedPat;
+      }
+
+      const target = vscode.workspace.workspaceFolders?.length
+        ? vscode.ConfigurationTarget.Workspace
+        : vscode.ConfigurationTarget.Global;
+      const settings = vscode.workspace.getConfiguration("azure-pipelines");
+      await settings.update("organization", organization.trim(), target);
+      await settings.update("project", project.trim(), target);
+      await settings.update("authMethod", selectedAuth.value, target);
+      if (selectedAuth.value === "pat") {
+        await secretStorage.store(PAT_SECRET_KEY, token);
+      }
+      await vscode.window.showInformationMessage(
+        `Azure DevOps connection saved using ${selectedAuth.label}.`
+      );
+      refreshAll();
+      return true;
+    })();
+    try {
+      return await configuring;
+    } finally {
+      configuring = undefined;
+    }
+  };
+
+  const getApi = async (promptForSetup = false) => {
+    let values = await getConnectionValues();
+    if ((!values.organization || !values.project || !values.token) && promptForSetup) {
+      const answer = await vscode.window.showWarningMessage(
+        "Configure an Azure DevOps organization, project, and authentication method to use pipeline features.",
+        "Configure"
+      );
+      if (answer === "Configure") {
+        await configureConnection();
+        values = await getConnectionValues();
+      }
+    }
+    if (!values.organization || !values.project || !values.token) {
+      return undefined;
+    }
+    return new AzureDevOpsApi(values);
+  };
+
+  const selectPipeline = async api => {
+    const response = await api.listPipelines();
+    const pipelines = responseItems(response, "pipelines");
+    const selected = await vscode.window.showQuickPick(pipelines.map(pipeline => ({
+      label: pipeline.name,
+      description: pipeline.folder || `Pipeline ${pipeline.id}`,
+      pipeline
+    })), {placeHolder: "Select an Azure Pipeline"});
+    return selected?.pipeline;
+  };
+
+  const findPipelineYaml = async (api, pipeline) => {
+    const details = await api.getPipeline(pipeline.id);
+    const configuredPath = details.configuration?.path?.replace(/^[/\\]+/, "");
+    const folders = vscode.workspace.workspaceFolders || [];
+    let matches = [];
+    if (configuredPath) {
+      for (const folder of folders) {
+        matches.push(...await vscode.workspace.findFiles(
+          new vscode.RelativePattern(folder, configuredPath.replace(/\\/g, "/")),
+          "**/node_modules/**",
+          10
+        ));
+      }
+    }
+    if (!matches.length) {
+      matches = await vscode.workspace.findFiles("**/*.{yml,yaml}", "**/node_modules/**", 500);
+    }
+    if (!matches.length) {
+      return {details, uri: undefined};
+    }
+    if (matches.length === 1) {
+      return {details, uri: matches[0]};
+    }
+    const selected = await vscode.window.showQuickPick(matches.map(uri => ({
+      label: vscode.workspace.asRelativePath(uri),
+      uri
+    })), {placeHolder: `Choose YAML for ${pipeline.name}`});
+    return {details, uri: selected?.uri};
+  };
+
+  const promptPipelineParameters = async (definitions, sourceLabel) => {
+    const values = {};
+    for (const parameter of definitions) {
+      const name = String(parameter.name);
+      const kind = parameterPromptKind(parameter);
+      let selected;
+      if (kind === "choice") {
+        const choices = parameter.values.map(value => ({
+          label: String(value),
+          description: parameter.default === value ? "Default" : undefined,
+          value
+        }));
+        selected = await vscode.window.showQuickPick(choices, {
+          title: `Pipeline parameter: ${parameter.displayName || name}`,
+          placeHolder: sourceLabel
+        });
+        if (!selected) {
+          return undefined;
+        }
+        values[name] = selected.value;
+        continue;
+      }
+      if (kind === "boolean") {
+        const choices = [
+          {label: "true", value: true},
+          {label: "false", value: false}
+        ];
+        selected = await vscode.window.showQuickPick(choices, {
+          title: `Pipeline parameter: ${parameter.displayName || name}`,
+          placeHolder: sourceLabel,
+          matchOnDescription: true
+        });
+        if (!selected) {
+          return undefined;
+        }
+        values[name] = selected.value;
+        continue;
+      }
+      const defaultValue = parameter.default === undefined
+        ? ""
+        : (typeof parameter.default === "object"
+            ? JSON.stringify(parameter.default)
+            : String(parameter.default));
+      const raw = await vscode.window.showInputBox({
+        title: `Pipeline parameter: ${parameter.displayName || name}`,
+        prompt: `${name} (${parameter.type || "string"})`,
+        value: defaultValue,
+        ignoreFocusOut: true,
+        validateInput: value => parameter.default === undefined && !value.trim()
+          ? "A value is required for this parameter."
+          : null
+      });
+      if (raw === undefined) {
+        return undefined;
+      }
+      try {
+        values[name] = typedParameterValue(raw, parameter.type || "string");
+      } catch (error) {
+        void vscode.window.showErrorMessage(`${name}: ${error.message}`);
+        return undefined;
+      }
+    }
+    return values;
+  };
+
+  const getPinned = () => context.workspaceState.get("azure-pipelines.pinned", []);
+  const getPinnedIds = () => new Set(getPinned().map(item => Number(item.id)));
+  const pipelinesProvider = new PipelineProvider({
+    getApi,
+    getPinnedIds,
+    currentBranch: false,
+    getBranch: currentGitBranch
+  });
+  const branchProvider = new PipelineProvider({
+    getApi,
+    getPinnedIds,
+    currentBranch: true,
+    getBranch: currentGitBranch
+  });
+  const libraryProvider = new LibraryProvider({getApi});
+  let variableNamesCache = {expires: 0, names: []};
+  context.subscriptions.push(libraryProvider.onDidChangeTreeData(() => {
+    variableNamesCache.expires = 0;
+  }));
+  const getVariableNames = async () => {
+    if (variableNamesCache.expires > Date.now()) {
+      return variableNamesCache.names;
+    }
+    try {
+      const api = await getApi(false);
+      if (!api) {
+        return [];
+      }
+      const groups = responseItems(await api.listVariableGroups(), "variableGroups");
+      variableNamesCache = {
+        expires: Date.now() + 30_000,
+        names: [...new Set(groups.flatMap(group => Object.keys(group.variables || {})))]
+      };
+      return variableNamesCache.names;
+    } catch {
+      return [];
+    }
+  };
+
+  vscode.window.registerTreeDataProvider("azure-pipelines.pipelines", pipelinesProvider);
+  vscode.window.registerTreeDataProvider("azure-pipelines.currentBranch", branchProvider);
+  vscode.window.registerTreeDataProvider("azure-pipelines.settings", libraryProvider);
+
+  const expressionDiagnostics = vscode.languages.createDiagnosticCollection("azure-pipelines");
+  context.subscriptions.push(expressionDiagnostics);
+  const validateYamlDocument = document => {
+    const text = document.getText();
+    if (!isAzurePipelineDocument(document.uri, text)) {
+      expressionDiagnostics.delete(document.uri);
+      return;
+    }
+    const diagnostics = getExpressionDiagnostics(text).map(item => new vscode.Diagnostic(
+      new vscode.Range(document.positionAt(item.start), document.positionAt(item.end)),
+      item.message,
+      vscode.DiagnosticSeverity.Warning
+    ));
+    expressionDiagnostics.set(document.uri, diagnostics);
+  };
+  context.subscriptions.push(
+    vscode.workspace.onDidOpenTextDocument(validateYamlDocument),
+    vscode.workspace.onDidChangeTextDocument(event => validateYamlDocument(event.document)),
+    vscode.workspace.onDidSaveTextDocument(validateYamlDocument)
+  );
+  vscode.workspace.textDocuments.forEach(validateYamlDocument);
+  context.subscriptions.push(vscode.languages.registerCompletionItemProvider(
+    [
+      {language: "yaml", scheme: "file"},
+      {language: "azure-pipelines", scheme: "file"}
+    ],
+    {
+      async provideCompletionItems(document, position) {
+        const text = document.getText();
+        if (!isAzurePipelineDocument(document.uri, text)) {
+          return [];
+        }
+        const offset = document.offsetAt(position);
+        const prefix = text.slice(0, offset);
+        const candidates = getExpressionCompletions(text, offset);
+        if (/\bvariables\.[A-Za-z0-9_.-]*$/.test(prefix) || /\$\([^)]*$/.test(prefix)) {
+          const names = await getVariableNames();
+          candidates.push(...names.map(label => ({
+            label,
+            insertText: label,
+            detail: "Azure DevOps variable group variable"
+          })));
+        }
+        return candidates.map(candidate => {
+          const item = new vscode.CompletionItem(candidate.label, vscode.CompletionItemKind.Function);
+          item.insertText = candidate.insertText;
+          item.detail = candidate.detail;
+          if (candidate.documentation) {
+            item.documentation = new vscode.MarkdownString(candidate.documentation);
+          }
+          return item;
+        });
+      }
+    },
+    "$", "{", ".", "[", "("
+  ));
+  context.subscriptions.push(vscode.languages.registerHoverProvider(
+    [
+      {language: "yaml", scheme: "file"},
+      {language: "azure-pipelines", scheme: "file"}
+    ],
+    {
+      provideHover(document, position) {
+        const text = document.getText();
+        if (!isAzurePipelineDocument(document.uri, text)) {
+          return undefined;
+        }
+        const result = getExpressionHover(text, document.offsetAt(position));
+        return result
+          ? new vscode.Hover(new vscode.MarkdownString(`**${result.title}**\n\n${result.body}`))
+          : undefined;
+      }
+    }
+  ));
+
+  const refreshAll = () => {
+    pipelinesProvider.refresh();
+    branchProvider.refresh();
+    libraryProvider.refresh();
+    void refreshPinnedStatus();
+  };
+
+  const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 40);
+  statusBar.command = "azure-pipelines.showPinned";
+  const refreshPinnedStatus = async () => {
+    const pinned = getPinned();
+    if (!pinned.length) {
+      statusBar.hide();
+      return;
+    }
+    const api = await getApi(false);
+    const statuses = api
+      ? await Promise.all(pinned.map(async pipeline => {
+          try {
+            const response = await api.listRuns(pipeline.id);
+            const latest = responseItems(response, "runs")[0];
+            return {
+              name: pipeline.name,
+              status: latest ? (latest.result || latest.state || "unknown") : "No runs"
+            };
+          } catch {
+            return {name: pipeline.name, status: "Unavailable"};
+          }
+        }))
+      : [];
+    const first = statuses[0];
+    statusBar.text = first
+      ? `$(rocket) ${first.name}: ${first.status}`
+      : `$(rocket) Azure Pipelines: ${pinned.length}`;
+    statusBar.tooltip = [
+      "Show pinned Azure Pipelines",
+      ...statuses.map(status => `${status.name}: ${status.status}`)
+    ].join("\n");
+    statusBar.show();
+  };
+  context.subscriptions.push(statusBar);
+
+  const register = (command, handler) => {
+    context.subscriptions.push(vscode.commands.registerCommand(command, handler));
+  };
+
+  register("azure-pipelines.configure", configureConnection);
+  register("azure-pipelines.disconnect", async () => {
+    const answer = await vscode.window.showWarningMessage(
+      "Clear this extension's organization, project, and PAT settings? This does not sign you out of VS Code's Microsoft account.",
+      {modal: true},
+      "Disconnect"
+    );
+    if (answer !== "Disconnect") {
+      return;
+    }
+    await secretStorage.delete(PAT_SECRET_KEY);
+    const settings = vscode.workspace.getConfiguration("azure-pipelines");
+    const target = vscode.workspace.workspaceFolders?.length
+      ? vscode.ConfigurationTarget.Workspace
+      : vscode.ConfigurationTarget.Global;
+    await settings.update("organization", "", target);
+    await settings.update("project", "", target);
+    await settings.update("authMethod", "pat", target);
+    refreshAll();
+  });
+  register("azure-pipelines.refresh", refreshAll);
+  register("azure-pipelines.refreshSchema", async () => {
+    const api = await getApi(true);
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!api || !folder) {
+      if (!folder) {
+        void vscode.window.showErrorMessage("Open a workspace folder before downloading an organization schema.");
+      }
+      return;
+    }
+    const schemaUri = vscode.Uri.joinPath(folder.uri, ".vscode", "azure-pipelines-schema.json");
+    const answer = await vscode.window.showWarningMessage(
+      "Download the organization's pipeline schema to .vscode/azure-pipelines-schema.json and use it for Azure Pipelines YAML?",
+      {modal: true},
+      "Download"
+    );
+    if (answer !== "Download") {
+      return;
+    }
+    try {
+      const schema = await api.getYamlSchema();
+      await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(folder.uri, ".vscode"));
+      await vscode.workspace.fs.writeFile(
+        schemaUri,
+        Buffer.from(JSON.stringify(schema, null, 2), "utf8")
+      );
+      const yamlSettings = vscode.workspace.getConfiguration("yaml");
+      const mappings = {...yamlSettings.get("schemas", {})};
+      delete mappings["https://raw.githubusercontent.com/microsoft/azure-pipelines-vscode/main/service-schema.json"];
+      mappings[`./${vscode.workspace.asRelativePath(schemaUri)}`] = [
+        "azure-pipelines.yml",
+        "azure-pipelines.yaml",
+        "**/azure-pipelines.yml",
+        "**/azure-pipelines.yaml",
+        ".azure-pipelines/**/*.yml",
+        ".azure-pipelines/**/*.yaml",
+        "**/.azure-pipelines/**/*.yml",
+        "**/.azure-pipelines/**/*.yaml",
+        "**/azure-pipelines/**/*.yml",
+        "**/azure-pipelines/**/*.yaml",
+        "**/.pipelines/**/*.yml",
+        "**/.pipelines/**/*.yaml",
+        "vsts-ci.yml",
+        "vsts-ci.yaml",
+        ".vsts-ci.yml",
+        ".vsts-ci.yaml",
+        "**/*.azure-pipelines.yml",
+        "**/*.azure-pipelines.yaml"
+      ];
+      await yamlSettings.update("schemas", mappings, vscode.ConfigurationTarget.Workspace);
+      await vscode.workspace.getConfiguration("azure-pipelines").update(
+        "customSchemaFile",
+        `./${vscode.workspace.asRelativePath(schemaUri)}`,
+        vscode.ConfigurationTarget.Workspace
+      );
+      void vscode.window.showInformationMessage("Downloaded and configured the organization pipeline schema.");
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not download the organization schema: ${error.message}`);
+    }
+  });
+  register("azure-pipelines.showPinned", async () => {
+    const api = await getApi(true);
+    if (!api) {
+      return;
+    }
+    const pinned = getPinned();
+    if (!pinned.length) {
+      void vscode.window.showInformationMessage("No pinned pipelines.");
+      return;
+    }
+    const choices = await Promise.all(pinned.map(async pipeline => {
+      try {
+        const runs = await api.listRuns(pipeline.id);
+        const latest = (runs.runs || runs.value || [])[0];
+        return {
+          label: pipeline.name,
+          description: latest ? `#${latest.id} ${latest.result || latest.state}` : "No runs",
+          pipeline,
+          run: latest
+        };
+      } catch {
+        return {label: pipeline.name, description: "Unable to load latest status", pipeline};
+      }
+    }));
+    const selected = await vscode.window.showQuickPick(choices, {placeHolder: "Pinned pipelines"});
+    if (selected?.run) {
+      const values = await getConnectionValues();
+      await vscode.env.openExternal(vscode.Uri.parse(webRunUrl(
+        values.organization,
+        values.project,
+        selected.run
+      )));
+    }
+  });
+
+  register("azure-pipelines.openRun", async argument => {
+    const run = getRunArgument(argument);
+    if (!run) {
+      return;
+    }
+    const values = await getConnectionValues();
+    await vscode.env.openExternal(vscode.Uri.parse(webRunUrl(values.organization, values.project, run)));
+  });
+
+  register("azure-pipelines.openEnvironment", async argument => {
+    const environment = argument?.environment || argument;
+    if (!environment?.id) {
+      return;
+    }
+    const values = await getConnectionValues();
+    const url = `https://dev.azure.com/${encodeURIComponent(values.organization)}/${encodeURIComponent(values.project)}/_environments/${encodeURIComponent(environment.id)}`;
+    await vscode.env.openExternal(vscode.Uri.parse(url));
+  });
+
+  register("azure-pipelines.addEnvironment", async () => {
+    const api = await getApi(true);
+    if (!api) {
+      return;
+    }
+    const name = await vscode.window.showInputBox({prompt: "Environment name", ignoreFocusOut: true});
+    if (!name?.trim()) {
+      return;
+    }
+    const description = await vscode.window.showInputBox({
+      prompt: "Optional environment description",
+      ignoreFocusOut: true
+    });
+    if (description === undefined) {
+      return;
+    }
+    try {
+      await api.createEnvironment({name: name.trim(), description});
+      libraryProvider.refresh();
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not create environment: ${error.message}`);
+    }
+  });
+
+  register("azure-pipelines.updateEnvironment", async argument => {
+    const environment = argument?.environment || argument;
+    if (!environment?.id) {
+      return;
+    }
+    const name = await vscode.window.showInputBox({
+      prompt: "Environment name",
+      value: environment.name,
+      ignoreFocusOut: true
+    });
+    if (!name?.trim()) {
+      return;
+    }
+    const description = await vscode.window.showInputBox({
+      prompt: "Environment description",
+      value: environment.description || "",
+      ignoreFocusOut: true
+    });
+    if (description === undefined) {
+      return;
+    }
+    if (name.trim() === environment.name && description === (environment.description || "")) {
+      return;
+    }
+    try {
+      const api = await getApi(true);
+      if (api) {
+        await api.updateEnvironment(environment.id, {
+          name: name.trim(),
+          description
+        });
+        libraryProvider.refresh();
+      }
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not rename environment: ${error.message}`);
+    }
+  });
+
+  register("azure-pipelines.deleteEnvironment", async argument => {
+    const environment = argument?.environment || argument;
+    if (!environment?.id) {
+      return;
+    }
+    const answer = await vscode.window.showWarningMessage(
+      `Permanently delete environment "${environment.name}"?`,
+      {modal: true},
+      "Delete"
+    );
+    if (answer !== "Delete") {
+      return;
+    }
+    try {
+      const api = await getApi(true);
+      if (api) {
+        await api.deleteEnvironment(environment.id);
+        libraryProvider.refresh();
+      }
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not delete environment: ${error.message}`);
+    }
+  });
+
+  register("azure-pipelines.openDefinition", async argument => {
+    let pipeline = getPipelineArgument(argument);
+    const api = await getApi(true);
+    if (!api) {
+      return;
+    }
+    if (!pipeline?.id) {
+      pipeline = await selectPipeline(api);
+      if (!pipeline) {
+        return;
+      }
+    }
+    try {
+      const details = await api.getPipeline(pipeline.id);
+      const configuredPath = details.configuration?.path?.replace(/^[/\\]+/, "");
+      const folders = vscode.workspace.workspaceFolders || [];
+      let matches = [];
+      if (configuredPath) {
+        for (const folder of folders) {
+          const found = await vscode.workspace.findFiles(
+            new vscode.RelativePattern(folder, configuredPath),
+            "**/node_modules/**",
+            10
+          );
+          matches.push(...found);
+        }
+      }
+      if (!matches.length) {
+        matches = await vscode.workspace.findFiles("**/*.{yml,yaml}", "**/node_modules/**", 500);
+      }
+      if (!matches.length) {
+        void vscode.window.showInformationMessage(
+          `Pipeline YAML path was not found in this workspace${configuredPath ? `: ${configuredPath}` : ""}.`
+        );
+        return;
+      }
+      const selected = matches.length === 1
+        ? matches[0]
+        : await vscode.window.showQuickPick(matches.map(uri => ({
+            label: vscode.workspace.asRelativePath(uri),
+            uri
+          })), {placeHolder: "Choose the pipeline YAML file"});
+      const uri = selected?.uri || selected;
+      if (uri) {
+        const document = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(document);
+      }
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not open pipeline YAML: ${error.message}`);
+    }
+  });
+
+  register("azure-pipelines.queuePipeline", async argument => {
+    let pipeline = getPipelineArgument(argument);
+    const api = await getApi(true);
+    if (!api) {
+      return;
+    }
+    if (!pipeline?.id) {
+      pipeline = await selectPipeline(api);
+      if (!pipeline) {
+        return;
+      }
+    }
+    const branch = await vscode.window.showInputBox({
+      title: `Run ${pipeline.name}`,
+      prompt: "Branch or ref to run",
+      value: await currentGitBranch() || "main",
+      ignoreFocusOut: true
+    });
+    if (!branch?.trim()) {
+      return;
+    }
+    let templateParameters;
+    let variables;
+    try {
+      const definition = await findPipelineYaml(api, pipeline);
+      let parameterDefinitions = [];
+      if (definition.uri) {
+        const document = await vscode.workspace.openTextDocument(definition.uri);
+        parameterDefinitions = getParameterDefinitions(document.getText());
+      }
+      if (parameterDefinitions.length) {
+        templateParameters = await promptPipelineParameters(
+          parameterDefinitions,
+          "Values read from the pipeline YAML in this workspace"
+        );
+        if (!templateParameters) {
+          return;
+        }
+      } else {
+        const parameterText = await vscode.window.showInputBox({
+          title: `Run ${pipeline.name}`,
+          prompt: "Optional template parameters as a JSON object (leave blank to skip)",
+          ignoreFocusOut: true
+        });
+        if (parameterText === undefined) {
+          return;
+        }
+        templateParameters = parseJsonObject(parameterText, "Template parameters");
+      }
+      const variableText = await vscode.window.showInputBox({
+        title: `Run ${pipeline.name}`,
+        prompt: "Optional run variables as a JSON object (leave blank to skip)",
+        password: true,
+        ignoreFocusOut: true
+      });
+      if (variableText === undefined) {
+        return;
+      }
+      variables = normalizeVariables(parseJsonObject(variableText, "Run variables"));
+      const logging = await vscode.window.showQuickPick([
+        {label: "Standard logging", value: false},
+        {label: "Enable verbose diagnostics (System.Debug)", value: true}
+      ], {placeHolder: "Pipeline logging"});
+      if (!logging) {
+        return;
+      }
+      if (logging.value) {
+        variables = normalizeVariables({...variables, "system.debug": true});
+      }
+    } catch (error) {
+      void vscode.window.showErrorMessage(error.message);
+      return;
+    }
+    const answer = await vscode.window.showWarningMessage(
+      `Queue pipeline "${pipeline.name}" on "${branch.trim()}"?`,
+      {modal: true},
+      "Queue"
+    );
+    if (answer !== "Queue") {
+      return;
+    }
+    try {
+      const run = await api.runPipeline(pipeline.id, {
+        branch: branch.trim(),
+        templateParameters,
+        variables
+      });
+      refreshAll();
+      if (run?.id) {
+        void vscode.window.showInformationMessage(`Queued ${pipeline.name} run #${run.id}.`);
+        await vscode.env.openExternal(vscode.Uri.parse(webRunUrl(
+          (await getConnectionValues()).organization,
+          (await getConnectionValues()).project,
+          run
+        )));
+      }
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not queue pipeline: ${error.message}`);
+    }
+  });
+
+  register("azure-pipelines.cancelRun", async argument => {
+    const run = getRunArgument(argument);
+    if (!run) {
+      return;
+    }
+    const answer = await vscode.window.showWarningMessage(
+      `Cancel Azure Pipelines run #${run.id}?`,
+      {modal: true},
+      "Cancel Run"
+    );
+    if (answer !== "Cancel Run") {
+      return;
+    }
+    try {
+      const api = await getApi(true);
+      if (api) {
+        await api.cancelRun(run.id);
+        refreshAll();
+      }
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not cancel run: ${error.message}`);
+    }
+  });
+
+  register("azure-pipelines.retryRun", async argument => {
+    const run = getRunArgument(argument);
+    if (!run) {
+      return;
+    }
+    const answer = await vscode.window.showWarningMessage(
+      `Retry Azure Pipelines run #${run.id}?`,
+      {modal: true},
+      "Retry Run"
+    );
+    if (answer !== "Retry Run") {
+      return;
+    }
+    try {
+      const api = await getApi(true);
+      if (api) {
+        await api.retryRun(run.id);
+        refreshAll();
+      }
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not retry run: ${error.message}`);
+    }
+  });
+
+  register("azure-pipelines.openLogs", async argument => {
+    const api = await getApi(true);
+    if (!api) {
+      return;
+    }
+    const run = argument?.run || argument?.record?.run;
+    const pipeline = argument?.pipeline || argument?.record?.pipeline;
+    const log = argument?.log;
+    const record = argument?.record;
+    const logId = record?.log?.id ?? log?.id;
+    if (logId === undefined) {
+      return;
+    }
+    try {
+      let content;
+      if (record && run) {
+        content = await api.getBuildLog(run.id, logId);
+      } else if (pipeline && run) {
+        content = await api.getPipelineLog(pipeline.id, run.id, logId);
+      }
+      if (content && typeof content === "object") {
+        content = content.signedContent || content.url || JSON.stringify(content, null, 2);
+      }
+      const document = await vscode.workspace.openTextDocument({
+        language: "log",
+        content: String(content || "No log content was returned.")
+      });
+      await vscode.window.showTextDocument(document, {preview: false});
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not load log: ${error.message}`);
+    }
+  });
+
+  register("azure-pipelines.openLogsInBrowser", async argument => {
+    const run = argument?.run;
+    const record = argument?.record;
+    if (!run) {
+      return;
+    }
+    const values = await getConnectionValues();
+    await vscode.env.openExternal(vscode.Uri.parse(
+      webLogUrl(values.organization, values.project, run, record)
+    ));
+  });
+
+  register("azure-pipelines.pinPipeline", async argument => {
+    const pipeline = getPipelineArgument(argument);
+    if (!pipeline?.id) {
+      return;
+    }
+    const pinned = getPinned();
+    if (!pinned.some(item => Number(item.id) === Number(pipeline.id))) {
+      await context.workspaceState.update("azure-pipelines.pinned", [
+        ...pinned,
+        {id: pipeline.id, name: pipeline.name}
+      ]);
+      refreshAll();
+    }
+  });
+
+  register("azure-pipelines.unpinPipeline", async argument => {
+    const pipeline = getPipelineArgument(argument);
+    if (!pipeline?.id) {
+      return;
+    }
+    await context.workspaceState.update("azure-pipelines.pinned", getPinned().filter(
+      item => Number(item.id) !== Number(pipeline.id)
+    ));
+    refreshAll();
+  });
+
+  const mutateVariableGroup = async (groupNode, mutate) => {
+    const api = await getApi(true);
+    if (!api || !groupNode?.group) {
+      return;
+    }
+    try {
+      const group = await api.getVariableGroup(groupNode.group.id);
+      if (group.type && group.type !== "Vsts") {
+        void vscode.window.showInformationMessage("Only standard Azure DevOps variable groups can be edited here.");
+        return;
+      }
+      const variables = {...(group.variables || {})};
+      const changed = await mutate(variables, group);
+      if (!changed) {
+        return;
+      }
+      if (Object.values(group.variables || {}).some(variable => variable.isSecret && variable.value == null)) {
+        const answer = await vscode.window.showWarningMessage(
+          "Azure DevOps masks existing secret values. Continue updating this group? Unchanged secret values will be sent without their hidden value.",
+          {modal: true},
+          "Continue"
+        );
+        if (answer !== "Continue") {
+          return;
+        }
+      }
+      const safeVariables = Object.fromEntries(Object.entries(variables).map(([name, variable]) => {
+        if (variable.isSecret && variable.value == null) {
+          const {value, ...maskedSecret} = variable;
+          return [name, maskedSecret];
+        }
+        return [name, variable];
+      }));
+      await api.updateVariableGroup({
+        id: group.id,
+        name: group.name,
+        description: group.description,
+        type: group.type,
+        variables: safeVariables,
+        providerData: group.providerData,
+        variableGroupProjectReferences: group.variableGroupProjectReferences
+      });
+      libraryProvider.refresh();
+      void vscode.window.showInformationMessage(`Updated variable group "${group.name}".`);
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not update variable group: ${error.message}`);
+    }
+  };
+
+  register("azure-pipelines.addVariableGroup", async () => {
+    const api = await getApi(true);
+    if (!api) {
+      return;
+    }
+    const name = await vscode.window.showInputBox({prompt: "Variable group name", ignoreFocusOut: true});
+    if (!name?.trim()) {
+      return;
+    }
+    const description = await vscode.window.showInputBox({
+      prompt: "Optional variable group description",
+      ignoreFocusOut: true
+    });
+    if (description === undefined) {
+      return;
+    }
+    try {
+      await api.createVariableGroup(name.trim(), description);
+      libraryProvider.refresh();
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not create variable group: ${error.message}`);
+    }
+  });
+
+  register("azure-pipelines.updateVariableGroup", async argument => {
+    const groupNode = argument?.group ? argument : undefined;
+    if (!groupNode) {
+      return;
+    }
+    const api = await getApi(true);
+    if (!api) {
+      return;
+    }
+    try {
+      const group = await api.getVariableGroup(groupNode.group.id);
+      if (group.type && group.type !== "Vsts") {
+        void vscode.window.showInformationMessage("Only standard Azure DevOps variable groups can be renamed here.");
+        return;
+      }
+      const name = await vscode.window.showInputBox({
+        prompt: "Variable group name",
+        value: group.name,
+        ignoreFocusOut: true
+      });
+      if (!name?.trim()) {
+        return;
+      }
+      const description = await vscode.window.showInputBox({
+        prompt: "Variable group description",
+        value: group.description || "",
+        ignoreFocusOut: true
+      });
+      if (description === undefined) {
+        return;
+      }
+      const hiddenSecrets = Object.values(group.variables || {}).some(
+        variable => variable.isSecret && variable.value == null
+      );
+      if (hiddenSecrets) {
+        const answer = await vscode.window.showWarningMessage(
+          "Azure DevOps masks existing secret values. Continue renaming this group? Unchanged secret values will be sent without their hidden value.",
+          {modal: true},
+          "Continue"
+        );
+        if (answer !== "Continue") {
+          return;
+        }
+      }
+      const variables = Object.fromEntries(Object.entries(group.variables || {}).map(([key, value]) => {
+        if (value.isSecret && value.value == null) {
+          const {value: hiddenValue, ...secret} = value;
+          return [key, secret];
+        }
+        return [key, value];
+      }));
+      await api.updateVariableGroup({
+        id: group.id,
+        name: name.trim(),
+        description,
+        type: group.type,
+        variables,
+        providerData: group.providerData,
+        variableGroupProjectReferences: (group.variableGroupProjectReferences || []).map(reference => ({
+          ...reference,
+          name: name.trim(),
+          description
+        }))
+      });
+      libraryProvider.refresh();
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not update variable group: ${error.message}`);
+    }
+  });
+
+  register("azure-pipelines.deleteVariableGroup", async argument => {
+    const groupNode = argument?.group ? argument : undefined;
+    if (!groupNode) {
+      return;
+    }
+    const answer = await vscode.window.showWarningMessage(
+      `Permanently delete variable group "${groupNode.group.name}"?`,
+      {modal: true},
+      "Delete"
+    );
+    if (answer !== "Delete") {
+      return;
+    }
+    try {
+      const api = await getApi(true);
+      if (api) {
+        await api.deleteVariableGroup(groupNode.group.id);
+        libraryProvider.refresh();
+      }
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not delete variable group: ${error.message}`);
+    }
+  });
+
+  register("azure-pipelines.addVariable", async argument => {
+    const groupNode = argument?.group ? argument : undefined;
+    if (!groupNode) {
+      return;
+    }
+    const name = await vscode.window.showInputBox({prompt: "Variable name", ignoreFocusOut: true});
+    if (!name?.trim()) {
+      return;
+    }
+    const kind = await vscode.window.showQuickPick(["Plain text", "Secret"], {
+      placeHolder: "Variable type"
+    });
+    if (!kind) {
+      return;
+    }
+    const value = await vscode.window.showInputBox({
+      prompt: `Value for ${name}`,
+      password: kind === "Secret",
+      ignoreFocusOut: true
+    });
+    if (value === undefined) {
+      return;
+    }
+    await mutateVariableGroup(groupNode, variables => {
+      if (Object.hasOwn(variables, name)) {
+        void vscode.window.showWarningMessage(`Variable "${name}" already exists.`);
+        return false;
+      }
+      variables[name] = {value, isSecret: kind === "Secret"};
+      return true;
+    });
+  });
+
+  register("azure-pipelines.updateVariable", async argument => {
+    const groupNode = argument?.group ? argument : undefined;
+    const variableName = argument?.variableName;
+    if (!groupNode || !variableName) {
+      return;
+    }
+    const current = argument.variable;
+    const value = await vscode.window.showInputBox({
+      prompt: `New value for ${variableName}${current?.isSecret ? " (secret; current value is hidden)" : ""}`,
+      value: current?.isSecret ? "" : (current?.value || ""),
+      password: Boolean(current?.isSecret),
+      ignoreFocusOut: true
+    });
+    if (value === undefined) {
+      return;
+    }
+    await mutateVariableGroup(groupNode, variables => {
+      const existing = variables[variableName] || {};
+      variables[variableName] = {...existing, value};
+      return true;
+    });
+  });
+
+  register("azure-pipelines.deleteVariable", async argument => {
+    const groupNode = argument?.group ? argument : undefined;
+    const variableName = argument?.variableName;
+    if (!groupNode || !variableName) {
+      return;
+    }
+    const answer = await vscode.window.showWarningMessage(
+      `Delete variable "${variableName}" from "${groupNode.group.name}"?`,
+      {modal: true},
+      "Delete"
+    );
+    if (answer !== "Delete") {
+      return;
+    }
+    await mutateVariableGroup(groupNode, variables => {
+      if (!Object.hasOwn(variables, variableName)) {
+        return false;
+      }
+      delete variables[variableName];
+      return true;
+    });
+  });
+
+  register("azure-pipelines.copyVariable", async argument => {
+    if (argument?.variableName) {
+      await vscode.env.clipboard.writeText(argument.variableName);
+      void vscode.window.showInformationMessage(`Copied variable name "${argument.variableName}".`);
+    }
+  });
+
+  register("azure-pipelines.copyVariableValue", async argument => {
+    const variable = argument?.variable;
+    if (!variable || variable.isSecret) {
+      return;
+    }
+    await vscode.env.clipboard.writeText(String(variable.value ?? ""));
+    void vscode.window.showInformationMessage("Copied variable value.");
+  });
+
+  const interval = vscode.workspace.getConfiguration("azure-pipelines").get("refreshInterval", 60);
+  let refreshTimer;
+  if (interval > 0) {
+    refreshTimer = setInterval(refreshAll, Math.max(30, interval) * 1000);
+    context.subscriptions.push({dispose: () => clearInterval(refreshTimer)});
+  }
+
+  context.subscriptions.push({dispose: () => {
+    pipelinesProvider.onDidChangeTreeDataEmitter.dispose();
+    branchProvider.onDidChangeTreeDataEmitter.dispose();
+    libraryProvider.onDidChangeTreeDataEmitter.dispose();
+  }});
+  refreshPinnedStatus();
+}
+
+function deactivate() {}
+
+module.exports = {activate, deactivate};
+
+=== C:\Users\johnm\Documents\Technology\azdo-extension\src\helpers.js ===
+"use strict";
+
+function parseJsonObject(value, title) {
+  if (!value?.trim()) {
+    return undefined;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error(`${title} must be valid JSON.`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${title} must be a JSON object.`);
+  }
+  return parsed;
+}
+
+function normalizeVariables(variables) {
+  if (!variables) {
+    return undefined;
+  }
+  return Object.fromEntries(Object.entries(variables).map(([name, value]) => [
+    name,
+    value && typeof value === "object" && !Array.isArray(value)
+      ? value
+      : {value: String(value)}
+  ]));
+}
+
+function webRunUrl(organization, project, run) {
+  return `https://dev.azure.com/${encodeURIComponent(organization)}/${encodeURIComponent(project)}/_build/results?buildId=${encodeURIComponent(run.id)}&view=results`;
+}
+
+function webLogUrl(organization, project, run, record) {
+  const url = new URL(webRunUrl(organization, project, run));
+  url.searchParams.set("view", "logs");
+  if (record?.parentId) {
+    url.searchParams.set("j", record.parentId);
+  }
+  if (record?.id) {
+    url.searchParams.set("t", record.id);
+  }
+  return url.toString();
+}
+
+module.exports = {normalizeVariables, parseJsonObject, webLogUrl, webRunUrl};
+
+=== C:\Users\johnm\Documents\Technology\azdo-extension\src\providers.js ===
+"use strict";
+
+const vscode = require("vscode");
+
+function responseItems(response, key) {
+  if (Array.isArray(response)) {
+    return response;
+  }
+  return response?.[key] || response?.value || [];
+}
+
+function statusIcon(run) {
+  const state = String(run.state || "").toLowerCase();
+  const result = String(run.result || "").toLowerCase();
+  if (["inprogress", "cancelling", "notstarted"].includes(state)) {
+    return new vscode.ThemeIcon("sync~spin", new vscode.ThemeColor("charts.blue"));
+  }
+  if (result === "succeeded") {
+    return new vscode.ThemeIcon("pass", new vscode.ThemeColor("testing.iconPassed"));
+  }
+  if (result === "failed" || result === "canceled") {
+    return new vscode.ThemeIcon("error", new vscode.ThemeColor("testing.iconFailed"));
+  }
+  if (result === "partiallysucceeded") {
+    return new vscode.ThemeIcon("warning", new vscode.ThemeColor("testing.iconQueued"));
+  }
+  return new vscode.ThemeIcon("circle-outline");
+}
+
+function runLabel(run) {
+  const name = run.name || `Run ${run.id}`;
+  const status = run.state === "completed" ? (run.result || "completed") : (run.state || "unknown");
+  return `#${run.id} ${name} - ${status}`;
+}
+
+function pipelineNode(pipeline, pinnedIds = new Set()) {
+  const pinned = pinnedIds.has(Number(pipeline.id));
+  const item = new vscode.TreeItem(
+    pipeline.name || `Pipeline ${pipeline.id}`,
+    vscode.TreeItemCollapsibleState.Collapsed
+  );
+  item.id = `pipeline-${pipeline.id}`;
+  item.contextValue = pinned ? "azurePipelinePinned" : "azurePipeline";
+  item.pipeline = pipeline;
+  item.description = pipeline.folder && pipeline.folder !== "\\" ? pipeline.folder : undefined;
+  item.iconPath = new vscode.ThemeIcon(pinned ? "pin" : "repo");
+  item.tooltip = `Pipeline ${pipeline.id}${pipeline.folder ? `\n${pipeline.folder}` : ""}`;
+  return item;
+}
+
+function runNode(run, pipeline) {
+  const active = run.state !== "completed";
+  const item = new vscode.TreeItem(runLabel(run), vscode.TreeItemCollapsibleState.Collapsed);
+  item.id = `run-${pipeline.id}-${run.id}`;
+  item.contextValue = active ? "azurePipelineRunActive" : "azurePipelineRunCompleted";
+  item.run = run;
+  item.pipeline = pipeline;
+  item.iconPath = statusIcon(run);
+  item.description = run.createdDate ? new Date(run.createdDate).toLocaleString() : undefined;
+  item.tooltip = `${pipeline.name} / run ${run.id}\n${run.resources?.repositories?.self?.refName || "Branch unavailable"}`;
+  item.command = {
+    command: "azure-pipelines.openRun",
+    title: "Open Run in Browser",
+    arguments: [{run, pipeline}]
+  };
+  return item;
+}
+
+function informationNode(label, detail, command) {
+  const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
+  item.description = detail;
+  item.iconPath = new vscode.ThemeIcon(command ? "gear" : "info");
+  if (command) {
+    item.command = {command, title: label};
+  }
+  return item;
+}
+
+function recordNode(record, hasChildren, run, pipeline, timelineId) {
+  const item = new vscode.TreeItem(
+    record.name || record.type || "Pipeline step",
+    hasChildren ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None
+  );
+  item.id = `timeline-${timelineId || "main"}-${record.id}`;
+  item.contextValue = record.log ? "azurePipelineLog" : "azurePipelineTimelineRecord";
+  item.description = [
+    record.result || record.state || record.currentOperation,
+    record.attempt > 1 ? `Attempt ${record.attempt}` : ""
+  ].filter(Boolean).join(" - ");
+  item.iconPath = statusIcon({state: record.state, result: record.result});
+  item.tooltip = [record.type, record.currentOperation, record.errorCount ? `${record.errorCount} errors` : ""]
+    .filter(Boolean)
+    .join("\n");
+  if (record.log?.id !== undefined) {
+    item.command = {
+      command: "azure-pipelines.openLogs",
+      title: "Open Logs",
+      arguments: [{record, run, pipeline, timelineId}]
+    };
+  }
+  item.record = record;
+  item.run = run;
+  item.pipeline = pipeline;
+  item.timelineId = timelineId;
+  return item;
+}
+
+class PipelineProvider {
+  constructor({getApi, getPinnedIds, currentBranch = false, getBranch}) {
+    this.getApi = getApi;
+    this.getPinnedIds = getPinnedIds;
+    this.currentBranch = currentBranch;
+    this.getBranch = getBranch;
+    this.onDidChangeTreeDataEmitter = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
+    this.timelines = new Map();
+    this.branchRuns = new Map();
+  }
+
+  refresh() {
+    this.timelines.clear();
+    this.branchRuns.clear();
+    this.onDidChangeTreeDataEmitter.fire();
+  }
+
+  getTreeItem(element) {
+    return element;
+  }
+
+  async getChildren(element) {
+    const api = await this.getApi(false);
+    if (!api) {
+      return [informationNode("Configure Azure DevOps", "Organization, project, and authentication required", "azure-pipelines.configure")];
+    }
+
+    try {
+      if (!element) {
+        if (this.currentBranch) {
+          return this.getPipelinesForBranch(api);
+        }
+        const pipelines = responseItems(await api.listPipelines(), "pipelines");
+        if (!pipelines.length) {
+          return [informationNode("No pipelines found", "Check the selected project and permissions")];
+        }
+        return pipelines.map(item => pipelineNode(item, this.getPinnedIds()));
+      }
+
+      if (element.previousAttempt && element.run && element.pipeline) {
+        const timeline = await this.getTimeline(api, element.run, element.previousAttempt.timelineId);
+        const record = (timeline?.records || []).find(item => item.id === element.previousAttempt.recordId);
+        return record
+          ? [recordNode(
+              {...record, attempt: element.previousAttempt.attempt},
+              (timeline.records || []).some(child => child.parentId === record.id),
+              element.run,
+              element.pipeline,
+              element.previousAttempt.timelineId
+            )]
+          : [];
+      }
+
+      if (element.record && element.run && element.pipeline) {
+        const timeline = await this.getTimeline(api, element.run, element.timelineId);
+        const children = (timeline?.records || [])
+          .filter(record => record.parentId === element.record.id)
+          .map(record => recordNode(
+            record,
+            (timeline.records || []).some(child => child.parentId === record.id),
+            element.run,
+            element.pipeline,
+            element.timelineId
+          ));
+        const previous = (element.record.previousAttempts || []).map(attempt => {
+          const item = new vscode.TreeItem(
+            `Previous attempt ${attempt.attempt}`,
+            vscode.TreeItemCollapsibleState.Collapsed
+          );
+          item.id = `attempt-${element.record.id}-${attempt.attempt}`;
+          item.contextValue = "azurePipelinePreviousAttempt";
+          item.previousAttempt = attempt;
+          item.run = element.run;
+          item.pipeline = element.pipeline;
+          return item;
+        });
+        return [...children, ...previous];
+      }
+
+      if (element.run && element.pipeline) {
+        return this.getRunDetails(api, element.run, element.pipeline);
+      }
+
+      if (element.pipeline) {
+        const runs = this.currentBranch
+          ? (this.branchRuns.get(Number(element.pipeline.id)) || [])
+          : responseItems(await api.listRuns(element.pipeline.id), "runs").slice(0, 100);
+        return runs.map(run => runNode(run, element.pipeline));
+      }
+
+      if (element.log) {
+        return [];
+      }
+    } catch (error) {
+      return [informationNode("Azure DevOps request failed", error.message)];
+    }
+    return [];
+  }
+
+  async getPipelinesForBranch(api) {
+    const branch = await this.getBranch();
+    if (!branch) {
+      return [informationNode("No Git branch detected", "Open a Git repository to filter runs by branch")];
+    }
+    const [buildsResponse, pipelinesResponse] = await Promise.all([
+      api.listBuildsForBranch(branch),
+      api.listPipelines()
+    ]);
+    const pipelineIds = new Set(
+      responseItems(pipelinesResponse, "pipelines").map(pipeline => Number(pipeline.id))
+    );
+    const builds = responseItems(buildsResponse, "builds");
+    const grouped = new Map();
+    for (const build of builds) {
+      if (!build.definition?.id || !pipelineIds.has(Number(build.definition.id))) {
+        continue;
+      }
+      const pipeline = {
+        id: build.definition.id,
+        name: build.definition.name || `Pipeline ${build.definition.id}`
+      };
+      const run = {
+        id: build.id,
+        name: build.buildNumber || `Run ${build.id}`,
+        state: build.status === "completed" ? "completed" : build.status,
+        result: build.result,
+        createdDate: build.startTime || build.queueTime,
+        resources: {repositories: {self: {refName: build.sourceBranch}}}
+      };
+      const key = Number(pipeline.id);
+      if (!grouped.has(key)) {
+        grouped.set(key, {pipeline, runs: []});
+      }
+      grouped.get(key).runs.push(run);
+    }
+    this.branchRuns = new Map([...grouped].map(([id, item]) => [id, item.runs]));
+    return [...grouped.values()].map(item => pipelineNode(item.pipeline, this.getPinnedIds()));
+  }
+
+  async getTimeline(api, run, timelineId) {
+    const key = `${run.id}:${timelineId || ""}`;
+    if (!this.timelines.has(key)) {
+      this.timelines.set(key, api.getBuildTimeline(run.id, timelineId).catch(() => undefined));
+    }
+    return this.timelines.get(key);
+  }
+
+  async getRunDetails(api, run, pipeline) {
+    const timeline = await this.getTimeline(api, run);
+    const records = timeline?.records || [];
+    if (records.length) {
+      const rootRecords = records.filter(record => !record.parentId);
+      return rootRecords.map(record => {
+        return recordNode(record, records.some(child => child.parentId === record.id), run, pipeline);
+      });
+    }
+
+    try {
+      const logResponse = await api.listPipelineLogs(pipeline.id, run.id);
+      const logs = responseItems(logResponse, "logs");
+      return logs.map(log => {
+        const item = new vscode.TreeItem(
+          log.name || `Log ${log.id}`,
+          vscode.TreeItemCollapsibleState.None
+        );
+        item.id = `log-${pipeline.id}-${run.id}-${log.id}`;
+        item.contextValue = "azurePipelineLog";
+        item.iconPath = new vscode.ThemeIcon("output");
+        item.description = log.lineCount ? `${log.lineCount} lines` : undefined;
+        item.command = {
+          command: "azure-pipelines.openLogs",
+          title: "Open Logs",
+          arguments: [{log, run, pipeline}]
+        };
+        return item;
+      });
+    } catch {
+      return [informationNode("Run details unavailable", "Timeline and logs are not available for this run")];
+    }
+  }
+}
+
+class LibraryProvider {
+  constructor({getApi}) {
+    this.getApi = getApi;
+    this.onDidChangeTreeDataEmitter = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
+  }
+
+  refresh() {
+    this.onDidChangeTreeDataEmitter.fire();
+  }
+
+  getTreeItem(element) {
+    return element;
+  }
+
+  async getChildren(element) {
+    const api = await this.getApi(false);
+    if (!api) {
+      return [informationNode("Configure Azure DevOps", "Organization, project, and authentication required", "azure-pipelines.configure")];
+    }
+
+    try {
+      if (!element) {
+        const [environmentsResult, groupsResult] = await Promise.allSettled([
+          api.listEnvironments(),
+          api.listVariableGroups()
+        ]);
+        return [
+          this.groupNode(
+            "Environments",
+            "environments",
+            environmentsResult.status === "fulfilled"
+              ? responseItems(environmentsResult.value, "environments")
+              : [],
+            environmentsResult.status === "rejected" ? environmentsResult.reason.message : undefined
+          ),
+          this.groupNode(
+            "Variable Groups",
+            "variableGroups",
+            groupsResult.status === "fulfilled"
+              ? responseItems(groupsResult.value, "variableGroups")
+              : [],
+            groupsResult.status === "rejected" ? groupsResult.reason.message : undefined
+          )
+        ];
+      }
+      if (element.section === "environments") {
+        if (element.error) {
+          return [informationNode("Could not load environments", element.error)];
+        }
+        return element.items.map(environment => {
+          const item = new vscode.TreeItem(environment.name, vscode.TreeItemCollapsibleState.None);
+          item.contextValue = "azureEnvironment";
+          item.environment = environment;
+          item.description = environment.description || `Environment ${environment.id}`;
+          item.iconPath = new vscode.ThemeIcon("cloud");
+          item.tooltip = `Azure Pipelines environment ${environment.name}`;
+          item.command = {
+            command: "azure-pipelines.openEnvironment",
+            title: "Open Environment in Browser",
+            arguments: [{environment}]
+          };
+          return item;
+        });
+      }
+      if (element.section === "variableGroups") {
+        if (element.error) {
+          return [informationNode("Could not load variable groups", element.error)];
+        }
+        return element.items.map(group => {
+          const item = new vscode.TreeItem(
+            group.name,
+            vscode.TreeItemCollapsibleState.Collapsed
+          );
+          item.id = `variable-group-${group.id}`;
+          item.contextValue = "azureVariableGroup";
+          item.description = group.type === "AzureKeyVault" ? "Key Vault" : `${Object.keys(group.variables || {}).length} variables`;
+          item.iconPath = new vscode.ThemeIcon(group.type === "AzureKeyVault" ? "key" : "library");
+          item.group = group;
+          return item;
+        });
+      }
+      if (element.group) {
+        return Object.entries(element.group.variables || {}).map(([name, variable]) => {
+          const isSecret = Boolean(variable.isSecret);
+          const item = new vscode.TreeItem(name, vscode.TreeItemCollapsibleState.None);
+          item.id = `variable-${element.group.id}-${name}`;
+          item.contextValue = isSecret ? "azureLibraryVariableSecret" : "azureLibraryVariable";
+          item.description = isSecret ? "Secret (value hidden)" : (variable.value ?? "");
+          item.tooltip = isSecret ? "Secret value is hidden by Azure DevOps" : `Value: ${variable.value ?? ""}`;
+          item.iconPath = new vscode.ThemeIcon(isSecret ? "lock" : "symbol-variable");
+          item.group = element.group;
+          item.variableName = name;
+          item.variable = variable;
+          return item;
+        });
+      }
+    } catch (error) {
+      return [informationNode("Azure DevOps request failed", error.message)];
+    }
+    return [];
+  }
+
+  groupNode(label, section, items, error) {
+    const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Collapsed);
+    item.id = section;
+    item.section = section;
+    item.items = items;
+    item.error = error;
+    item.contextValue = section === "environments" ? "azureEnvironments" : "azureVariableGroups";
+    item.iconPath = new vscode.ThemeIcon(section === "environments" ? "cloud" : "library");
+    item.description = error ? "Unavailable" : String(items.length);
+    return item;
+  }
+}
+
+module.exports = {
+  LibraryProvider,
+  PipelineProvider,
+  informationNode,
+  responseItems
+};
+
+=== C:\Users\johnm\Documents\Technology\azdo-extension\src\yamlSupport.js ===
+"use strict";
+
+const YAML = require("yaml");
+
+const EXPRESSION_FUNCTIONS = [
+  ["and", "and(value1, value2, ...)", "Returns true when all arguments are true."],
+  ["coalesce", "coalesce(value1, value2, ...)", "Returns the first non-empty, non-null string."],
+  ["contains", "contains(container, item)", "Tests whether a string or array contains a value."],
+  ["containsValue", "containsValue(objectOrArray, value)", "Tests object or array values for a match."],
+  ["convertToJson", "convertToJson(value)", "Converts an object to a JSON string."],
+  ["counter", "counter(prefix, seed)", "Returns a pipeline counter value."],
+  ["endsWith", "endsWith(value, suffix)", "Tests whether a string ends with a suffix."],
+  ["eq", "eq(left, right)", "Returns true when values are equal."],
+  ["format", "format(formatString, ...)", "Formats a string using the supplied arguments."],
+  ["ge", "ge(left, right)", "Returns true when the left value is greater than or equal to the right."],
+  ["gt", "gt(left, right)", "Returns true when the left value is greater than the right."],
+  ["iif", "iif(condition, trueValue, falseValue)", "Returns a value based on a condition."],
+  ["in", "in(value, value1, value2, ...)", "Tests whether a value matches any listed value."],
+  ["join", "join(separator, array)", "Joins an array into a string."],
+  ["le", "le(left, right)", "Returns true when the left value is less than or equal to the right."],
+  ["length", "length(value)", "Returns the number of items in a string or array."],
+  ["lower", "lower(value)", "Converts a string to lowercase."],
+  ["lt", "lt(left, right)", "Returns true when the left value is less than the right."],
+  ["ne", "ne(left, right)", "Returns true when values are not equal."],
+  ["not", "not(value)", "Negates a boolean value."],
+  ["notIn", "notIn(value, value1, value2, ...)", "Tests that a value matches none of the listed values."],
+  ["or", "or(value1, value2, ...)", "Returns true when any argument is true."],
+  ["replace", "replace(value, old, new)", "Replaces occurrences in a string."],
+  ["split", "split(value, separator)", "Splits a string into an array."],
+  ["startsWith", "startsWith(value, prefix)", "Tests whether a string starts with a prefix."],
+  ["upper", "upper(value)", "Converts a string to uppercase."],
+  ["succeeded", "succeeded()", "Tests whether prior pipeline work succeeded."],
+  ["failed", "failed()", "Tests whether a prior pipeline step failed."],
+  ["canceled", "canceled()", "Tests whether the pipeline was canceled."],
+  ["succeededOrFailed", "succeededOrFailed()", "Tests for success or failure, excluding cancellation."],
+  ["always", "always()", "Runs regardless of the outcome of prior work."]
+].map(([name, signature, description]) => ({name, signature, description}));
+
+const FUNCTION_MAP = new Map(EXPRESSION_FUNCTIONS.map(item => [item.name, item]));
+const CONTEXTS = [
+  ["variables", "Pipeline and predefined variables."],
+  ["parameters", "Compile-time template parameters."],
+  ["dependencies", "Outputs and results from dependent jobs or stages."],
+  ["stageDependencies", "Outputs from jobs in dependent stages."],
+  ["resources", "Pipeline resource metadata."]
+];
+const SYSTEM_VARIABLES = [
+  "Build.BuildId", "Build.BuildNumber", "Build.Reason", "Build.SourceBranch",
+  "Build.SourceBranchName", "Build.SourceVersion", "Build.Repository.Name",
+  "System.CollectionUri", "System.DefinitionId", "System.JobId", "System.TeamProject"
+];
+
+function parsePipelineYaml(text) {
+  try {
+    return YAML.parse(text, {uniqueKeys: false}) || {};
+  } catch {
+    return undefined;
+  }
+}
+
+function isAzurePipelineDocument(uri, text = "") {
+  const path = String(uri?.fsPath || uri?.path || "").replace(/\\/g, "/").toLowerCase();
+  if (path.includes("/.github/workflows/")) {
+    return false;
+  }
+  if (
+    /(^|\/)azure-pipelines(?:\.[^/]*)?\.ya?ml$/.test(path) ||
+    /\.azure-pipelines\.ya?ml$/.test(path) ||
+    /\/\.azure-pipelines\//.test(path)
+  ) {
+    return true;
+  }
+  return /^\s*(?:trigger|pr|pool|stages|jobs|extends|resources|parameters|schedules):/m.test(text);
+}
+
+function getParameterDefinitions(text) {
+  const document = parsePipelineYaml(text);
+  if (!document || !Array.isArray(document.parameters)) {
+    return [];
+  }
+  return document.parameters.filter(parameter => parameter && typeof parameter === "object" && parameter.name);
+}
+
+function parameterPromptKind(parameter) {
+  if (Array.isArray(parameter.values) && parameter.values.length) {
+    return "choice";
+  }
+  if (parameter.type === "boolean") {
+    return "boolean";
+  }
+  return "input";
+}
+
+function typedParameterValue(value, type) {
+  if (type === "string" || type === "step" || type === "job" || type === "stage" || type === "deployment") {
+    return value;
+  }
+  if (type === "number") {
+    const number = Number(value);
+    if (!Number.isFinite(number)) {
+      throw new Error("Enter a valid number.");
+    }
+    return number;
+  }
+  try {
+    return YAML.parse(value);
+  } catch {
+    throw new Error("Enter a valid YAML value for this parameter.");
+  }
+}
+
+function pipelineNames(text) {
+  const root = parsePipelineYaml(text) || {};
+  const stages = [];
+  const jobs = [];
+  const steps = [];
+  const jobsByStage = new Map();
+  const stepsByJob = new Map();
+  const readJobs = (list, stageName) => {
+    for (const job of Array.isArray(list) ? list : []) {
+      const name = job.job || job.deployment;
+      if (name) {
+        jobs.push(String(name));
+      }
+      const jobName = String(name || "");
+      const namedSteps = [];
+      for (const step of job.steps || []) {
+        if (step.name) {
+          steps.push(String(step.name));
+          namedSteps.push(String(step.name));
+        }
+      }
+      if (jobName) {
+        stepsByJob.set(jobName, namedSteps);
+        if (stageName) {
+          if (!jobsByStage.has(stageName)) {
+            jobsByStage.set(stageName, []);
+          }
+          jobsByStage.get(stageName).push(jobName);
+        }
+      }
+    }
+  };
+  readJobs(root.jobs);
+  for (const stage of root.stages || []) {
+    if (stage.stage) {
+      stages.push(String(stage.stage));
+    }
+    readJobs(stage.jobs, String(stage.stage || ""));
+  }
+  return {root, stages, jobs, steps, jobsByStage, stepsByJob};
+}
+
+function expressionAt(text, offset) {
+  const before = text.slice(0, offset);
+  const candidates = [
+    ["${{", "}}", "template"],
+    ["$[", "]", "runtime"],
+    ["$(", ")", "macro"]
+  ];
+  let selected;
+  for (const [open, close, kind] of candidates) {
+    const start = before.lastIndexOf(open);
+    const end = before.lastIndexOf(close);
+    if (start >= 0 && start > end && (!selected || start > selected.start)) {
+      selected = {start: start + open.length, kind};
+    }
+  }
+  if (selected) {
+    return {kind: selected.kind, body: before.slice(selected.start)};
+  }
+  const lineStart = before.lastIndexOf("\n") + 1;
+  const line = before.slice(lineStart);
+  if (/\bcondition\s*:\s*[^#]*$/i.test(line)) {
+    return {kind: "condition", body: line.replace(/^.*?\bcondition\s*:\s*/i, "")};
+  }
+  return undefined;
+}
+
+function getExpressionCompletions(text, offset) {
+  const expression = expressionAt(text, offset);
+  if (!expression) {
+    return [];
+  }
+  const prefix = expression.body;
+  const {root, stages, jobs, steps, jobsByStage, stepsByJob} = pipelineNames(text);
+  const variables = [];
+  if (root.variables && !Array.isArray(root.variables)) {
+    variables.push(...Object.keys(root.variables));
+  } else if (Array.isArray(root.variables)) {
+    variables.push(...root.variables.map(variable => variable?.name).filter(Boolean));
+  }
+  const parameters = (root.parameters || []).map(parameter => parameter?.name).filter(Boolean);
+  if (expression.kind === "macro") {
+    return [...new Set([...variables, ...SYSTEM_VARIABLES])]
+      .map(label => ({label, insertText: label, detail: "Pipeline variable"}));
+  }
+  const dependencyOutput = prefix.match(
+    /\bdependencies\.([A-Za-z0-9_-]+)\.outputs\[['"]?([^'"]*)?$/
+  );
+  if (dependencyOutput) {
+    const [stepPrefix = ""] = (dependencyOutput[2] || "").split(".");
+    return (stepsByJob.get(dependencyOutput[1]) || [])
+      .filter(step => step.startsWith(stepPrefix))
+      .map(step => ({
+        label: `${step}.`,
+        insertText: `${step}.`,
+        detail: "Named step output variable"
+      }));
+  }
+  const stageOutput = prefix.match(
+    /\bstageDependencies\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.outputs\[['"]?([^'"]*)?$/
+  );
+  if (stageOutput) {
+    const [stepPrefix = ""] = (stageOutput[3] || "").split(".");
+    return (stepsByJob.get(stageOutput[2]) || [])
+      .filter(step => step.startsWith(stepPrefix))
+      .map(step => ({
+        label: `${step}.`,
+        insertText: `${step}.`,
+        detail: "Named step output variable"
+      }));
+  }
+  const dependencyProperties = prefix.match(/\bdependencies\.([A-Za-z0-9_-]+)\.$/);
+  if (dependencyProperties) {
+    return ["result", "outputs"].map(label => ({
+      label,
+      insertText: label,
+      detail: "Dependency property"
+    }));
+  }
+  const stageJobs = prefix.match(/\bstageDependencies\.([A-Za-z0-9_-]+)\.$/);
+  if (stageJobs) {
+    return (jobsByStage.get(stageJobs[1]) || []).map(label => ({
+      label,
+      insertText: label,
+      detail: "Job in dependent stage"
+    }));
+  }
+  const context = prefix.match(/\b(stageDependencies|dependencies|parameters|variables|resources)\.([A-Za-z0-9_.-]*)$/);
+  if (context) {
+    const kind = context[1];
+    const names = kind === "variables" ? [...new Set([...variables, ...SYSTEM_VARIABLES])]
+      : kind === "parameters" ? parameters
+        : kind === "dependencies" ? [...new Set([...stages, ...jobs])]
+          : kind === "stageDependencies" ? stages
+            : ["pipelines", "repositories", "containers", "packages"];
+    return names.map(label => ({label, insertText: label, detail: `${kind} context`}));
+  }
+  if (/\bsteps\.[A-Za-z0-9_-]*$/.test(prefix)) {
+    return steps.map(label => ({label, insertText: label, detail: "Named pipeline step"}));
+  }
+  const candidates = [
+    ...EXPRESSION_FUNCTIONS.map(fn => ({
+      label: `${fn.name}()`,
+      insertText: `${fn.name}()`,
+      detail: fn.signature,
+      documentation: fn.description
+    })),
+    ...CONTEXTS.map(([label, detail]) => ({label: `${label}.`, insertText: `${label}.`, detail})),
+    {label: "true", insertText: "true", detail: "Boolean literal"},
+    {label: "false", insertText: "false", detail: "Boolean literal"},
+    {label: "null", insertText: "null", detail: "Null literal"}
+  ];
+  return candidates;
+}
+
+function getExpressionHover(text, offset) {
+  const word = text.slice(0, offset).match(/[A-Za-z_][A-Za-z0-9_.-]* *$/)?.[0]?.trim();
+  if (!word) {
+    return undefined;
+  }
+  const fn = FUNCTION_MAP.get(word);
+  if (fn) {
+    return {title: `Azure Pipelines expression: ${fn.signature}`, body: fn.description};
+  }
+  const context = CONTEXTS.find(([name]) => name === word);
+  if (context) {
+    return {title: `${word} context`, body: context[1]};
+  }
+  if (SYSTEM_VARIABLES.includes(word)) {
+    return {title: `${word} variable`, body: "A predefined Azure Pipelines variable. Availability depends on the pipeline, stage, job, and expression phase."};
+  }
+  return undefined;
+}
+
+function getExpressionDiagnostics(text) {
+  const diagnostics = [];
+  const openers = [["${{", "}}"], ["$[", "]"]];
+  for (const [open, close] of openers) {
+    let searchFrom = 0;
+    while (true) {
+      const start = text.indexOf(open, searchFrom);
+      if (start < 0) {
+        break;
+      }
+      const end = text.indexOf(close, start + open.length);
+      if (end < 0) {
+        diagnostics.push({start, end: start + open.length, message: `Unclosed Azure Pipelines expression; expected "${close}".`});
+        break;
+      }
+      const bodyStart = start + open.length;
+      const body = text.slice(bodyStart, end);
+      const calls = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+      let match;
+      while ((match = calls.exec(body))) {
+        if (!FUNCTION_MAP.has(match[1])) {
+          const functionStart = bodyStart + match.index;
+          diagnostics.push({
+            start: functionStart,
+            end: functionStart + match[1].length,
+            message: `Unknown Azure Pipelines expression function "${match[1]}".`
+          });
+        }
+      }
+      searchFrom = end + close.length;
+    }
+  }
+  return diagnostics;
+}
+
+module.exports = {
+  EXPRESSION_FUNCTIONS,
+  getExpressionCompletions,
+  getExpressionDiagnostics,
+  getExpressionHover,
+  isAzurePipelineDocument,
+  getParameterDefinitions,
+  parameterPromptKind,
+  parsePipelineYaml,
+  pipelineNames,
+  typedParameterValue
+};
+

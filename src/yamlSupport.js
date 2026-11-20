@@ -33,7 +33,8 @@ const EXPRESSION_FUNCTIONS = [
   ["failed", "failed()", "Tests whether a prior pipeline step failed."],
   ["canceled", "canceled()", "Tests whether the pipeline was canceled."],
   ["succeededOrFailed", "succeededOrFailed()", "Tests for success or failure, excluding cancellation."],
-  ["always", "always()", "Runs regardless of the outcome of prior work."]
+  ["always", "always()", "Runs regardless of the outcome of prior work."],
+  ["xor", "xor(value1, value2)", "Returns true when exactly one argument is true."]
 ].map(([name, signature, description]) => ({name, signature, description}));
 
 const FUNCTION_MAP = new Map(EXPRESSION_FUNCTIONS.map(item => [item.name, item]));
@@ -177,6 +178,109 @@ function expressionAt(text, offset) {
   return undefined;
 }
 
+function findExpressionEnd(text, bodyStart, close) {
+  let quote;
+  let nested = 0;
+  for (let index = bodyStart; index < text.length; index += 1) {
+    const character = text[index];
+    if (quote) {
+      if (character === quote) {
+        if (text[index + 1] === quote) {
+          index += 1;
+        } else {
+          quote = undefined;
+        }
+      } else if (character === "\\" && index + 1 < text.length) {
+        index += 1;
+      }
+      continue;
+    }
+    if (character === "'" || character === "\"") {
+      quote = character;
+      continue;
+    }
+    if (close === "]" && character === "[") {
+      nested += 1;
+      continue;
+    }
+    if (close === ")" && character === "(") {
+      nested += 1;
+      continue;
+    }
+    if ((close === "]" && character === "]") || (close === ")" && character === ")")) {
+      if (nested > 0) {
+        nested -= 1;
+      } else {
+        return index;
+      }
+      continue;
+    }
+    if (close !== "]" && close !== ")" && text.startsWith(close, index)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function expressionRanges(text) {
+  const delimiters = [
+    ["${{", "}}", "template"],
+    ["$[", "]", "runtime"],
+    ["$(", ")", "macro"]
+  ];
+  const ranges = [];
+  let searchFrom = 0;
+  while (searchFrom < text.length) {
+    let next;
+    for (const [open, close, kind] of delimiters) {
+      const start = text.indexOf(open, searchFrom);
+      if (start >= 0 && (!next || start < next.start)) {
+        next = {start, open, close, kind};
+      }
+    }
+    if (!next) {
+      break;
+    }
+    const bodyStart = next.start + next.open.length;
+    const closeStart = findExpressionEnd(text, bodyStart, next.close);
+    ranges.push({
+      kind: next.kind,
+      start: bodyStart,
+      end: closeStart < 0 ? text.length : closeStart
+    });
+    searchFrom = closeStart < 0 ? text.length : closeStart + next.close.length;
+  }
+  return ranges;
+}
+
+function maskStringLiterals(text) {
+  const characters = text.split("");
+  let quote;
+  for (let index = 0; index < characters.length; index += 1) {
+    const character = characters[index];
+    if (quote) {
+      characters[index] = " ";
+      if (character === quote) {
+        if (characters[index + 1] === quote) {
+          characters[index + 1] = " ";
+          index += 1;
+        } else {
+          quote = undefined;
+        }
+      } else if (character === "\\" && index + 1 < characters.length) {
+        characters[index + 1] = " ";
+        index += 1;
+      }
+      continue;
+    }
+    if (character === "'" || character === "\"") {
+      quote = character;
+      characters[index] = " ";
+    }
+  }
+  return characters.join("");
+}
+
 function getExpressionCompletions(text, offset) {
   const expression = expressionAt(text, offset);
   if (!expression) {
@@ -266,12 +370,56 @@ function getExpressionCompletions(text, offset) {
 }
 
 function getExpressionHover(text, offset) {
-  const word = text.slice(0, offset).match(/[A-Za-z_][A-Za-z0-9_.-]* *$/)?.[0]?.trim();
+  const lineStart = text.lastIndexOf("\n", offset - 1) + 1;
+  const lineEnd = text.indexOf("\n", offset);
+  const line = text.slice(lineStart, lineEnd < 0 ? text.length : lineEnd);
+  const condition = line.match(/^\s*(?:-\s*)?condition\s*:\s*/i);
+  const ranges = expressionRanges(text);
+  if (condition) {
+    const start = lineStart + condition[0].length;
+    ranges.push({
+      start,
+      end: lineEnd < 0 ? text.length : lineEnd
+    });
+  }
+  const range = ranges.find(candidate => offset >= candidate.start && offset <= candidate.end);
+  if (!range) {
+    return undefined;
+  }
+  const body = text.slice(range.start, range.end);
+  const maskedBody = maskStringLiterals(body);
+  const localOffset = offset - range.start;
+  const tokens = /[A-Za-z_][A-Za-z0-9_.-]*/g;
+  let match;
+  let word;
+  let tokenEnd;
+  while ((match = tokens.exec(maskedBody))) {
+    const end = match.index + match[0].length;
+    if (localOffset >= match.index && localOffset <= end) {
+      word = match[0];
+      tokenEnd = end;
+      break;
+    }
+  }
   if (!word) {
+    const literalTokens = /[A-Za-z_][A-Za-z0-9_.-]*/g;
+    while ((match = literalTokens.exec(body))) {
+      const end = match.index + match[0].length;
+      if (
+        localOffset >= match.index &&
+        localOffset <= end &&
+        SYSTEM_VARIABLES.includes(match[0])
+      ) {
+        return {
+          title: `${match[0]} variable`,
+          body: "A predefined Azure Pipelines variable. Availability depends on the pipeline, stage, job, and expression phase."
+        };
+      }
+    }
     return undefined;
   }
   const fn = FUNCTION_MAP.get(word);
-  if (fn) {
+  if (fn && /^\s*\(/.test(body.slice(tokenEnd))) {
     return {title: `Azure Pipelines expression: ${fn.signature}`, body: fn.description};
   }
   const context = CONTEXTS.find(([name]) => name === word);
@@ -294,16 +442,18 @@ function getExpressionDiagnostics(text) {
       if (start < 0) {
         break;
       }
-      const end = text.indexOf(close, start + open.length);
+      const bodyStart = start + open.length;
+      const end = findExpressionEnd(text, bodyStart, close);
       if (end < 0) {
         diagnostics.push({start, end: start + open.length, message: `Unclosed Azure Pipelines expression; expected "${close}".`});
         break;
       }
-      const bodyStart = start + open.length;
       const body = text.slice(bodyStart, end);
       const calls = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+      calls.lastIndex = 0;
+      const executableBody = maskStringLiterals(body);
       let match;
-      while ((match = calls.exec(body))) {
+      while ((match = calls.exec(executableBody))) {
         if (!FUNCTION_MAP.has(match[1])) {
           const functionStart = bodyStart + match.index;
           diagnostics.push({

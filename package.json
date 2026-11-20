@@ -323,6 +323,11 @@
           "default": 60,
           "minimum": 0,
           "description": "Automatic refresh interval in seconds (minimum 30). Set to 0 to disable polling."
+        },
+        "azure-pipelines.customSchemaFile": {
+          "type": "string",
+          "default": "",
+          "description": "Workspace-relative path to the organization-specific Azure Pipelines YAML schema."
         }
       }
     },

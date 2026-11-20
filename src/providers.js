@@ -9,10 +9,29 @@ function responseItems(response, key) {
   return response?.[key] || response?.value || [];
 }
 
+function orderedRecords(records) {
+  return records
+    .map((record, index) => ({record, index, order: Number(record.order)}))
+    .sort((left, right) => {
+      const leftOrder = Number.isFinite(left.order) ? left.order : Number.MAX_SAFE_INTEGER;
+      const rightOrder = Number.isFinite(right.order) ? right.order : Number.MAX_SAFE_INTEGER;
+      return leftOrder - rightOrder || left.index - right.index;
+    })
+    .map(item => item.record);
+}
+
 function statusIcon(run) {
   const state = String(run.state || "").toLowerCase();
   const result = String(run.result || "").toLowerCase();
-  if (["inprogress", "cancelling", "notstarted"].includes(state)) {
+  if ([
+    "inprogress",
+    "cancelling",
+    "canceling",
+    "notstarted",
+    "queued",
+    "pending",
+    "postponed"
+  ].includes(state)) {
     return new vscode.ThemeIcon("sync~spin", new vscode.ThemeColor("charts.blue"));
   }
   if (result === "succeeded") {
@@ -161,8 +180,8 @@ class PipelineProvider {
 
       if (element.record && element.run && element.pipeline) {
         const timeline = await this.getTimeline(api, element.run, element.timelineId);
-        const children = (timeline?.records || [])
-          .filter(record => record.parentId === element.record.id)
+        const children = orderedRecords((timeline?.records || [])
+          .filter(record => record.parentId === element.record.id))
           .map(record => recordNode(
             record,
             (timeline.records || []).some(child => child.parentId === record.id),
@@ -257,7 +276,7 @@ class PipelineProvider {
     const timeline = await this.getTimeline(api, run);
     const records = timeline?.records || [];
     if (records.length) {
-      const rootRecords = records.filter(record => !record.parentId);
+      const rootRecords = orderedRecords(records.filter(record => !record.parentId));
       return rootRecords.map(record => {
         return recordNode(record, records.some(child => child.parentId === record.id), run, pipeline);
       });
@@ -280,6 +299,9 @@ class PipelineProvider {
           title: "Open Logs",
           arguments: [{log, run, pipeline}]
         };
+        item.log = log;
+        item.run = run;
+        item.pipeline = pipeline;
         return item;
       });
     } catch {
