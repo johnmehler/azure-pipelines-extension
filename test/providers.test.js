@@ -123,6 +123,19 @@ test("multi-root providers scope pipeline groups to each workspace folder", asyn
   assert.equal(roots[0].workspaceFolder, folders[0]);
 });
 
+test("Library section IDs are unique across workspace folders", () => {
+  const folders = [
+    {name: "frontend", uri: {toString: () => "file:///frontend"}},
+    {name: "backend", uri: {toString: () => "file:///backend"}}
+  ];
+  const provider = new LibraryProvider({getApi: async () => ({})});
+
+  const frontend = provider.groupNode("Environments", "environments", [], undefined, folders[0]);
+  const backend = provider.groupNode("Environments", "environments", [], undefined, folders[1]);
+
+  assert.notEqual(frontend.id, backend.id);
+});
+
 test("branch run caches remain isolated when multiple roots are expanded", async () => {
   const folders = [
     {name: "frontend", uri: {toString: () => "file:///frontend", fsPath: "/frontend"}},

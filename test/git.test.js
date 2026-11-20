@@ -29,7 +29,12 @@ test("Azure DevOps SSH and legacy visualstudio.com remotes are recognized", () =
 test("Azure DevOps Server collection remotes are recognized", () => {
   assert.deepEqual(
     parseAzureDevOpsRemote("https://ado.example.test/tfs/DefaultCollection/Build/_git/agent"),
-    {organization: "DefaultCollection", project: "Build", repository: "agent"}
+    {
+      organization: "DefaultCollection",
+      project: "Build",
+      repository: "agent",
+      serverUrl: "https://ado.example.test/tfs/DefaultCollection"
+    }
   );
 });
 

@@ -329,7 +329,7 @@ test("completes and validates Azure agent pools and environments", () => {
   const poolSource = "jobs:\n- job: build\n  pool:\n    name: ";
   assert.deepEqual(
     getAzureYamlCompletions(poolSource, poolSource.length, {
-      agentPools: [{name: "Linux"}]
+      pools: [{name: "Linux"}]
     }).map(item => item.label),
     ["Linux"]
   );
@@ -349,9 +349,33 @@ test("completes and validates Azure agent pools and environments", () => {
     "    vmImage: made-up"
   ].join("\n"), {
     environments: ["Production"],
-    agentPools: ["Linux"]
+    pools: ["Linux"]
   });
   assert.equal(diagnostics.length, 3);
+
+  const validResources = [
+    "pool: ubuntu-latest",
+    "environment:",
+    "  name: Production"
+  ].join("\n");
+  assert.deepEqual(getPipelineResourceDiagnostics(validResources, {
+    pools: ["Linux"],
+    environments: ["Production"]
+  }), []);
+  const missingObjectEnvironment = [
+    "jobs:",
+    "- deployment: deploy",
+    "  environment:",
+    "    name: Missing",
+    "  pool: ubuntu-latest"
+  ].join("\n");
+  assert.match(
+    getPipelineResourceDiagnostics(missingObjectEnvironment, {
+      pools: ["Linux"],
+      environments: ["Production"]
+    })[0].message,
+    /Unknown Azure Pipelines environment "Missing"/
+  );
 });
 
 test("reports function arity and statically invalid parameter references", () => {

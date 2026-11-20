@@ -128,8 +128,20 @@ function activate(context) {
       "azure-pipelines",
       folder?.uri
     );
-    const serverUrl = settings.get("serverUrl", "").trim();
+    let serverUrl = settings.get("serverUrl", "").trim();
     const authMethod = settings.get("authMethod", "pat");
+    let organization = settings.get("organization", "").trim();
+    let project = settings.get("project", "").trim();
+    let repository;
+    if (!organization || !project) {
+      const remoteValues = await getAzureDevOpsRemotes(folder);
+      if (remoteValues.length === 1) {
+        organization ||= remoteValues[0].organization;
+        project ||= remoteValues[0].project;
+        serverUrl ||= remoteValues[0].serverUrl || "";
+        repository = remoteValues[0].repository;
+      }
+    }
     const useMicrosoftAuth = authMethod === "microsoft" && !serverUrl;
     let token;
     if (useMicrosoftAuth) {
@@ -145,17 +157,6 @@ function activate(context) {
       }
     } else {
       token = await secretStorage.get(PAT_SECRET_KEY);
-    }
-    let organization = settings.get("organization", "").trim();
-    let project = settings.get("project", "").trim();
-    let repository;
-    if (!organization || !project) {
-      const remoteValues = await getAzureDevOpsRemotes(folder);
-      if (remoteValues.length === 1) {
-        organization ||= remoteValues[0].organization;
-        project ||= remoteValues[0].project;
-        repository = remoteValues[0].repository;
-      }
     }
     return {
       organization,
@@ -518,28 +519,36 @@ function activate(context) {
     getWorkspaceFolders
   });
   const libraryProvider = new LibraryProvider({getApi, getWorkspaceFolders});
-  let variableNamesCache = {expires: 0, names: []};
+  const variableNamesCache = new Map();
   let taskCatalogCache = {connection: "", expires: 0, definitions: []};
   let taskCatalogRequest;
   const templateContentCache = new Map();
   context.subscriptions.push(libraryProvider.onDidChangeTreeData(() => {
-    variableNamesCache.expires = 0;
+    variableNamesCache.clear();
   }));
-  const getVariableNames = async () => {
-    if (variableNamesCache.expires > Date.now()) {
-      return variableNamesCache.names;
+  const getVariableNames = async folder => {
+    const values = await getConnectionValues(folder);
+    const cacheKey = [
+      folder?.uri.toString() || "global",
+      values.serverUrl || values.organization,
+      values.project
+    ].join("|").toLowerCase();
+    const cached = variableNamesCache.get(cacheKey);
+    if (cached?.expires > Date.now()) {
+      return cached.names;
     }
     try {
-      const api = await getApi(false);
+      const api = await getApi(false, folder);
       if (!api) {
         return [];
       }
       const groups = responseItems(await api.listVariableGroups(), "variableGroups");
-      variableNamesCache = {
+      const result = {
         expires: Date.now() + 30_000,
         names: [...new Set(groups.flatMap(group => Object.keys(group.variables || {})))]
       };
-      return variableNamesCache.names;
+      variableNamesCache.set(cacheKey, result);
+      return result.names;
     } catch {
       return [];
     }
@@ -759,6 +768,7 @@ function activate(context) {
 
   const expressionDiagnostics = vscode.languages.createDiagnosticCollection("azure-pipelines");
   context.subscriptions.push(expressionDiagnostics);
+  const yamlValidationTimers = new Map();
   const validateYamlDocument = async document => {
     const text = document.getText();
     if (!isAzurePipelineDocument(document.uri, text)) {
@@ -823,10 +833,47 @@ function activate(context) {
     }
     expressionDiagnostics.set(document.uri, diagnostics);
   };
+  const validateYamlDocumentNow = document => {
+    const key = document.uri.toString();
+    const timer = yamlValidationTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      yamlValidationTimers.delete(key);
+    }
+    void validateYamlDocument(document);
+  };
+  const scheduleYamlValidation = document => {
+    const key = document.uri.toString();
+    const previousTimer = yamlValidationTimers.get(key);
+    if (previousTimer) {
+      clearTimeout(previousTimer);
+    }
+    yamlValidationTimers.set(key, setTimeout(() => {
+      yamlValidationTimers.delete(key);
+      void validateYamlDocument(document);
+    }, 300));
+  };
   context.subscriptions.push(
-    vscode.workspace.onDidOpenTextDocument(validateYamlDocument),
-    vscode.workspace.onDidChangeTextDocument(event => validateYamlDocument(event.document)),
-    vscode.workspace.onDidSaveTextDocument(validateYamlDocument)
+    vscode.workspace.onDidOpenTextDocument(validateYamlDocumentNow),
+    vscode.workspace.onDidChangeTextDocument(event => scheduleYamlValidation(event.document)),
+    vscode.workspace.onDidSaveTextDocument(validateYamlDocumentNow),
+    vscode.workspace.onDidCloseTextDocument(document => {
+      const key = document.uri.toString();
+      const timer = yamlValidationTimers.get(key);
+      if (timer) {
+        clearTimeout(timer);
+        yamlValidationTimers.delete(key);
+      }
+      expressionDiagnostics.delete(document.uri);
+    }),
+    {
+      dispose() {
+        for (const timer of yamlValidationTimers.values()) {
+          clearTimeout(timer);
+        }
+        yamlValidationTimers.clear();
+      }
+    }
   );
   vscode.workspace.textDocuments.forEach(validateYamlDocument);
   context.subscriptions.push(vscode.languages.registerCompletionItemProvider(
@@ -865,7 +912,7 @@ function activate(context) {
           }
         }
         if (/\bvariables\.[A-Za-z0-9_.-]*$/.test(prefix) || /\$\([^)]*$/.test(prefix)) {
-          const names = await getVariableNames();
+          const names = await getVariableNames(workspaceFolder);
           candidates.push(...names.map(label => ({
             label,
             insertText: label,
@@ -1283,7 +1330,9 @@ function activate(context) {
     try {
       const details = await api.getPipeline(pipeline.id);
       const configuredPath = details.configuration?.path?.replace(/^[/\\]+/, "");
-      const folders = vscode.workspace.workspaceFolders || [];
+      const folders = pipeline.workspaceFolder
+        ? [pipeline.workspaceFolder]
+        : vscode.workspace.workspaceFolders || [];
       let matches = [];
       if (configuredPath) {
         for (const folder of folders) {
@@ -1295,8 +1344,14 @@ function activate(context) {
           matches.push(...found);
         }
       }
-      if (!matches.length) {
+      if (!matches.length && !pipeline.workspaceFolder) {
         matches = await vscode.workspace.findFiles("**/*.{yml,yaml}", "**/node_modules/**", 500);
+      } else if (!matches.length) {
+        matches = await vscode.workspace.findFiles(
+          new vscode.RelativePattern(pipeline.workspaceFolder, "**/*.{yml,yaml}"),
+          "**/node_modules/**",
+          500
+        );
       }
       if (!matches.length) {
         void vscode.window.showInformationMessage(

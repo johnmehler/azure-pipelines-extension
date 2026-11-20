@@ -7,6 +7,7 @@ function parseAzureDevOpsRemote(remote) {
 
   const value = remote.trim();
   let host;
+  let origin;
   let path;
   try {
     const normalized = /^[^/]+@[^:]+:/.test(value)
@@ -14,6 +15,7 @@ function parseAzureDevOpsRemote(remote) {
       : value;
     const url = new URL(normalized);
     host = url.hostname.toLowerCase();
+    origin = url.origin;
     path = decodeURIComponent(url.pathname).split("/").filter(Boolean);
   } catch {
     return undefined;
@@ -22,6 +24,7 @@ function parseAzureDevOpsRemote(remote) {
   let organization;
   let project;
   let repository;
+  let serverUrl;
   if (host === "dev.azure.com") {
     [organization, project] = path;
     if (path[2]?.toLowerCase() === "_git") {
@@ -49,13 +52,17 @@ function parseAzureDevOpsRemote(remote) {
       organization = path[gitIndex - 2];
       project = path[gitIndex - 1];
       repository = path[gitIndex + 1];
+      const collectionPath = path.slice(0, gitIndex - 1)
+        .map(segment => encodeURIComponent(segment))
+        .join("/");
+      serverUrl = `${origin}/${collectionPath}`;
     }
   }
 
   if (!organization || !project) {
     return undefined;
   }
-  return {organization, project, repository};
+  return {organization, project, repository, ...(serverUrl ? {serverUrl} : {})};
 }
 
 function parseGitRemotes(output) {
@@ -75,7 +82,7 @@ function parseGitRemotes(output) {
   const candidates = originRows.length ? originRows : rows;
   const unique = new Map();
   for (const {remote: candidate} of candidates) {
-    const key = `${candidate.organization.toLowerCase()}/${candidate.project.toLowerCase()}`;
+    const key = `${candidate.serverUrl || candidate.organization}/${candidate.project}`.toLowerCase();
     if (!unique.has(key)) {
       unique.set(key, candidate);
     }

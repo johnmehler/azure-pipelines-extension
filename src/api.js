@@ -74,7 +74,8 @@ class AzureDevOpsApi {
     rawBody,
     contentType = "application/json",
     accept = "application/json",
-    rawResponse = false
+    rawResponse = false,
+    includeResponse = false
   } = {}) {
     const headers = {Accept: accept};
     headers.Authorization = this.authType === "bearer"
@@ -100,25 +101,66 @@ class AzureDevOpsApi {
       }
       throw new Error(`Azure DevOps returned ${response.status}: ${detail || response.statusText}`);
     }
+    let result;
     if (!text) {
-      return null;
+      result = null;
+    } else if (rawResponse) {
+      result = text;
+    } else {
+      try {
+        result = JSON.parse(text);
+      } catch {
+        result = text;
+      }
     }
-    if (rawResponse) {
-      return text;
+    return includeResponse ? {body: result, headers: response.headers} : result;
+  }
+
+  async requestAllPages(route, itemsKey) {
+    const items = [];
+    const seenTokens = new Set();
+    let continuationToken;
+    let firstBody;
+    let token;
+    do {
+      const page = await this.request(this.projectUrl(route, {
+        $top: 200,
+        continuationToken
+      }), {includeResponse: true});
+      const body = page.body;
+      if (firstBody === undefined) {
+        firstBody = body;
+      }
+      const pageItems = Array.isArray(body)
+        ? body
+        : body?.value || body?.[itemsKey] || [];
+      items.push(...pageItems);
+      token = page.headers?.get?.("x-ms-continuationtoken") ||
+        page.headers?.["x-ms-continuationtoken"] ||
+        body?.continuationToken;
+      continuationToken = token && !seenTokens.has(token) ? token : undefined;
+      if (continuationToken) {
+        seenTokens.add(continuationToken);
+      }
+    } while (continuationToken);
+
+    if (Array.isArray(firstBody)) {
+      return items;
     }
-    try {
-      return JSON.parse(text);
-    } catch {
-      return text;
+    const result = {...(firstBody && typeof firstBody === "object" ? firstBody : {}), value: items};
+    if (Array.isArray(result[itemsKey])) {
+      result[itemsKey] = items;
     }
+    delete result.continuationToken;
+    return result;
   }
 
   listPipelines() {
-    return this.request(this.projectUrl("pipelines", {$top: 200}));
+    return this.requestAllPages("pipelines", "pipelines");
   }
 
   listBuildDefinitions() {
-    return this.request(this.projectUrl("build/definitions", {$top: 200}));
+    return this.requestAllPages("build/definitions", "definitions");
   }
 
   getBuildDefinition(definitionId) {

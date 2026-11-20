@@ -419,7 +419,9 @@ const VM_IMAGES = [
   "macOS-latest", "macOS-15", "macOS-14", "macOS-13"
 ];
 
-function getAzureYamlCompletions(text, offset, {agentPools = [], environments = []} = {}) {
+function getAzureYamlCompletions(text, offset, catalogs = {}) {
+  const {environments = []} = catalogs;
+  const agentPools = catalogs.pools || catalogs.agentPools || [];
   const lineStart = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
   const lineEnd = text.indexOf("\n", offset);
   const line = text.slice(lineStart, lineEnd < 0 ? text.length : lineEnd);
@@ -629,13 +631,13 @@ function getScheduleInlayHints(text) {
   return hints;
 }
 
-function getPipelineResourceDiagnostics(text, {agentPools = [], environments = []} = {}) {
+function getPipelineResourceDiagnostics(text, catalogs = {}) {
   const diagnostics = [];
-  const pools = new Set(agentPools
+  const pools = new Set([...(catalogs.pools || []), ...(catalogs.agentPools || [])]
     .map(pool => typeof pool === "string" ? pool : pool?.name)
     .filter(Boolean)
     .map(name => name.toLowerCase()));
-  const environmentNames = new Set(environments
+  const environmentNames = new Set((catalogs.environments || [])
     .map(environment => typeof environment === "string" ? environment : environment?.name)
     .filter(Boolean)
     .map(name => name.toLowerCase()));
@@ -667,6 +669,7 @@ function getPipelineResourceDiagnostics(text, {agentPools = [], environments = [
             typeof poolName === "string" &&
             pools.size &&
             !pools.has(poolName.toLowerCase()) &&
+            !VM_IMAGES.some(image => image.toLowerCase() === poolName.toLowerCase()) &&
             Array.isArray(nameNode.range)
           ) {
             diagnostics.push({
@@ -687,17 +690,20 @@ function getPipelineResourceDiagnostics(text, {agentPools = [], environments = [
             });
           }
         }
+        const environmentNode = pair?.key?.value === "environment" ? pair.value : undefined;
+        const environmentName = typeof environmentNode?.value === "string"
+          ? environmentNode
+          : environmentNode?.items?.find(entry => entry?.key?.value === "name")?.value;
         if (
-          pair?.key?.value === "environment" &&
-          typeof pair.value?.value === "string" &&
+          typeof environmentName?.value === "string" &&
           environmentNames.size &&
-          !environmentNames.has(pair.value.value.toLowerCase()) &&
-          Array.isArray(pair.value.range)
+          !environmentNames.has(environmentName.value.toLowerCase()) &&
+          Array.isArray(environmentName.range)
         ) {
           diagnostics.push({
-            start: pair.value.range[0],
-            end: pair.value.range[1],
-            message: `Unknown Azure Pipelines environment "${pair.value.value}".`
+            start: environmentName.range[0],
+            end: environmentName.range[1],
+            message: `Unknown Azure Pipelines environment "${environmentName.value}".`
           });
         }
         visit(pair.value);

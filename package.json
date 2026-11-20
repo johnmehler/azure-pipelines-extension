@@ -501,8 +501,7 @@
     ]
   },
   "extensionDependencies": [
-    "redhat.vscode-yaml",
-    "ms-azure-devops.azure-pipelines"
+    "redhat.vscode-yaml"
   ],
   "dependencies": {
     "yaml": "^2.9.1"

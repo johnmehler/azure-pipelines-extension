@@ -48,6 +48,35 @@ test("requests use the PAT as basic-auth password and parse JSON", async () => {
   assert.equal(request.headers.Authorization, `Basic ${Buffer.from(":test-pat").toString("base64")}`);
 });
 
+test("pipeline and build-definition lists follow continuation tokens", async () => {
+  const requests = [];
+  const api = createApi(async url => {
+    const requestUrl = new URL(url);
+    requests.push(requestUrl);
+    const isPipeline = requestUrl.pathname.endsWith("/pipelines");
+    const page = requestUrl.searchParams.get("continuationToken") ? 2 : 1;
+    const body = isPipeline
+      ? {value: [{id: page}]}
+      : {value: [{id: page + 10}], ...(page === 1 ? {continuationToken: "definitions-next"} : {})};
+    return {
+      ok: true,
+      headers: new Headers(
+        isPipeline && page === 1 ? {"x-ms-continuationtoken": "pipelines-next"} : {}
+      ),
+      text: async () => JSON.stringify(body)
+    };
+  });
+
+  const pipelines = await api.listPipelines();
+  const definitions = await api.listBuildDefinitions();
+
+  assert.deepEqual(pipelines.value, [{id: 1}, {id: 2}]);
+  assert.deepEqual(definitions.value, [{id: 11}, {id: 12}]);
+  assert.equal(requests.length, 4);
+  assert.equal(requests[1].searchParams.get("continuationToken"), "pipelines-next");
+  assert.equal(requests[3].searchParams.get("continuationToken"), "definitions-next");
+});
+
 test("task definitions use the organization-scoped Distributed Task endpoint", async () => {
   let requestUrl;
   const api = createApi(async url => {

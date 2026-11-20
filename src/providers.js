@@ -778,7 +778,7 @@ class LibraryProvider {
 
   groupNode(label, section, items, error, workspaceFolder) {
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Collapsed);
-    item.id = section;
+    item.id = `library-${workspaceFolder?.uri.toString() || "global"}-${section}`;
     item.section = section;
     item.items = items;
     item.error = error;
