@@ -3,7 +3,7 @@
   "displayName": "Azure DevOps Pipelines",
   "description": "Browse, run, and inspect Azure DevOps pipelines from VS Code.",
   "version": "0.1.0",
-  "publisher": "local",
+  "publisher": "JohnMehler",
   "license": "MIT",
   "engines": {
     "vscode": "^1.96.0"
