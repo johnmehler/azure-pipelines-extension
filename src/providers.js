@@ -52,28 +52,35 @@ function runLabel(run) {
   return `#${run.id} ${name} - ${status}`;
 }
 
-function pipelineNode(pipeline, pinnedIds = new Set()) {
+function pipelineNode(pipeline, pinnedIds = new Set(), workspaceFolder) {
   const pinned = pinnedIds.has(Number(pipeline.id));
+  const workspaceKey = workspaceFolder?.uri.toString() || "";
   const item = new vscode.TreeItem(
     pipeline.name || `Pipeline ${pipeline.id}`,
     vscode.TreeItemCollapsibleState.Collapsed
   );
-  item.id = `pipeline-${pipeline.id}`;
+  item.id = `pipeline-${workspaceKey}-${pipeline.id}`;
   item.contextValue = pinned ? "azurePipelinePinned" : "azurePipeline";
   item.pipeline = pipeline;
+  item.workspaceFolder = workspaceFolder;
+  if (workspaceFolder) {
+    item.pipeline = {...pipeline, workspaceFolder};
+  }
   item.description = pipeline.folder && pipeline.folder !== "\\" ? pipeline.folder : undefined;
   item.iconPath = new vscode.ThemeIcon(pinned ? "pin" : "repo");
   item.tooltip = `Pipeline ${pipeline.id}${pipeline.folder ? `\n${pipeline.folder}` : ""}`;
   return item;
 }
 
-function runNode(run, pipeline) {
+function runNode(run, pipeline, workspaceFolder = pipeline.workspaceFolder) {
   const active = run.state !== "completed";
+  const workspaceKey = workspaceFolder?.uri.toString() || "";
   const item = new vscode.TreeItem(runLabel(run), vscode.TreeItemCollapsibleState.Collapsed);
-  item.id = `run-${pipeline.id}-${run.id}`;
+  item.id = `run-${workspaceKey}-${pipeline.id}-${run.id}`;
   item.contextValue = active ? "azurePipelineRunActive" : "azurePipelineRunCompleted";
   item.run = run;
   item.pipeline = pipeline;
+  item.workspaceFolder = workspaceFolder;
   item.iconPath = statusIcon(run);
   item.description = run.createdDate ? new Date(run.createdDate).toLocaleString() : undefined;
   item.tooltip = `${pipeline.name} / run ${run.id}\n${run.resources?.repositories?.self?.refName || "Branch unavailable"}`;
@@ -85,23 +92,33 @@ function runNode(run, pipeline) {
   return item;
 }
 
-function informationNode(label, detail, command) {
+function informationNode(label, detail, command, argumentsList) {
   const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
   item.description = detail;
   item.iconPath = new vscode.ThemeIcon(command ? "gear" : "info");
   if (command) {
-    item.command = {command, title: label};
+    item.command = {command, title: label, arguments: argumentsList};
   }
   return item;
 }
 
-function recordNode(record, hasChildren, run, pipeline, timelineId) {
+function recordNode(record, hasChildren, run, pipeline, timelineId, workspaceFolder, parentStageRefName) {
   const item = new vscode.TreeItem(
     record.name || record.type || "Pipeline step",
     hasChildren ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None
   );
-  item.id = `timeline-${timelineId || "main"}-${record.id}`;
-  item.contextValue = record.log ? "azurePipelineLog" : "azurePipelineTimelineRecord";
+  item.id = `timeline-${workspaceFolder?.uri.toString() || ""}-${pipeline.id}-${timelineId || "main"}-${record.id}`;
+  const recordType = String(record.type || "").toLowerCase();
+  const stageRefName = recordType === "stage"
+    ? (record.identifier || record.name)
+    : parentStageRefName;
+  item.contextValue = record.log
+    ? "azurePipelineLog"
+    : recordType === "stage"
+      ? "azurePipelineStageRetry"
+      : recordType === "job" && stageRefName
+        ? "azurePipelineJobRetry"
+        : "azurePipelineTimelineRecord";
   item.description = [
     record.result || record.state || record.currentOperation,
     record.attempt > 1 ? `Attempt ${record.attempt}` : ""
@@ -121,15 +138,40 @@ function recordNode(record, hasChildren, run, pipeline, timelineId) {
   item.run = run;
   item.pipeline = pipeline;
   item.timelineId = timelineId;
+  item.workspaceFolder = workspaceFolder;
+  item.stageRefName = stageRefName;
+  return item;
+}
+
+function workspaceNode(folder) {
+  const item = new vscode.TreeItem(folder.name, vscode.TreeItemCollapsibleState.Collapsed);
+  item.id = `workspace-${folder.uri.toString()}`;
+  item.contextValue = "azurePipelineWorkspace";
+  item.workspaceFolder = folder;
+  item.description = folder.uri.fsPath;
+  item.iconPath = new vscode.ThemeIcon("root-folder");
+  return item;
+}
+
+function artifactsNode(run, pipeline, workspaceFolder) {
+  const item = new vscode.TreeItem("Artifacts", vscode.TreeItemCollapsibleState.Collapsed);
+  item.id = `artifacts-${workspaceFolder?.uri.toString() || ""}-${pipeline.id}-${run.id}`;
+  item.contextValue = "azurePipelineArtifacts";
+  item.iconPath = new vscode.ThemeIcon("archive");
+  item.run = run;
+  item.pipeline = pipeline;
+  item.workspaceFolder = workspaceFolder;
+  item.artifactsRoot = true;
   return item;
 }
 
 class PipelineProvider {
-  constructor({getApi, getPinnedIds, currentBranch = false, getBranch}) {
+  constructor({getApi, getPinnedIds, currentBranch = false, getBranch, getWorkspaceFolders}) {
     this.getApi = getApi;
     this.getPinnedIds = getPinnedIds;
     this.currentBranch = currentBranch;
     this.getBranch = getBranch;
+    this.getWorkspaceFolders = getWorkspaceFolders;
     this.onDidChangeTreeDataEmitter = new vscode.EventEmitter();
     this.onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
     this.timelines = new Map();
@@ -147,12 +189,39 @@ class PipelineProvider {
   }
 
   async getChildren(element) {
-    const api = await this.getApi(false);
-    if (!api) {
-      return [informationNode("Configure Azure DevOps", "Organization, project, and authentication required", "azure-pipelines.configure")];
-    }
-
     try {
+      if (!element) {
+        const folders = this.getWorkspaceFolders?.() || [];
+        if (folders.length > 1) {
+          return folders.map(workspaceNode);
+        }
+      }
+
+      const workspaceFolder = element?.workspaceFolder || element?.pipeline?.workspaceFolder;
+      const api = await this.getApi(false, workspaceFolder);
+      if (!api) {
+        return [informationNode(
+          "Configure Azure DevOps",
+          workspaceFolder
+            ? `No connection detected for ${workspaceFolder.name}`
+            : "Organization, project, and authentication required",
+          "azure-pipelines.configure",
+          workspaceFolder ? [{workspaceFolder}] : undefined
+        )];
+      }
+
+      if (element?.contextValue === "azurePipelineWorkspace") {
+        if (this.currentBranch) {
+          return this.getPipelinesForBranch(api, element.workspaceFolder);
+        }
+        const pipelines = responseItems(await api.listPipelines(), "pipelines");
+        return pipelines.map(pipeline => pipelineNode(
+          pipeline,
+          this.getPinnedIds(),
+          element.workspaceFolder
+        ));
+      }
+
       if (!element) {
         if (this.currentBranch) {
           return this.getPipelinesForBranch(api);
@@ -173,7 +242,8 @@ class PipelineProvider {
               (timeline.records || []).some(child => child.parentId === record.id),
               element.run,
               element.pipeline,
-              element.previousAttempt.timelineId
+              element.previousAttempt.timelineId,
+              workspaceFolder
             )]
           : [];
       }
@@ -187,21 +257,45 @@ class PipelineProvider {
             (timeline.records || []).some(child => child.parentId === record.id),
             element.run,
             element.pipeline,
-            element.timelineId
+            element.timelineId,
+            workspaceFolder,
+            element.stageRefName
           ));
         const previous = (element.record.previousAttempts || []).map(attempt => {
           const item = new vscode.TreeItem(
             `Previous attempt ${attempt.attempt}`,
             vscode.TreeItemCollapsibleState.Collapsed
           );
-          item.id = `attempt-${element.record.id}-${attempt.attempt}`;
+          item.id = `attempt-${workspaceFolder?.uri.toString() || ""}-${element.pipeline.id}-${element.record.id}-${attempt.attempt}`;
           item.contextValue = "azurePipelinePreviousAttempt";
           item.previousAttempt = attempt;
           item.run = element.run;
           item.pipeline = element.pipeline;
+          item.workspaceFolder = workspaceFolder;
           return item;
         });
         return [...children, ...previous];
+      }
+
+      if (element.artifactsRoot && element.run) {
+        const response = await api.listBuildArtifacts(element.run.id);
+        return responseItems(response, "artifacts").map(artifact => {
+          const item = new vscode.TreeItem(artifact.name, vscode.TreeItemCollapsibleState.None);
+          item.id = `artifact-${workspaceFolder?.uri.toString() || ""}-${element.pipeline.id}-${element.run.id}-${artifact.id || artifact.name}`;
+          item.contextValue = "azurePipelineArtifact";
+          item.iconPath = new vscode.ThemeIcon("archive");
+          item.description = artifact.resource?.type;
+          item.run = element.run;
+          item.pipeline = element.pipeline;
+          item.artifact = artifact;
+          item.workspaceFolder = workspaceFolder;
+          item.command = {
+            command: "azure-pipelines.downloadArtifact",
+            title: "Download Artifact",
+            arguments: [item]
+          };
+          return item;
+        });
       }
 
       if (element.run && element.pipeline) {
@@ -210,9 +304,9 @@ class PipelineProvider {
 
       if (element.pipeline) {
         const runs = this.currentBranch
-          ? (this.branchRuns.get(Number(element.pipeline.id)) || [])
+          ? (this.branchRuns.get(this.pipelineKey(element.pipeline, workspaceFolder)) || [])
           : responseItems(await api.listRuns(element.pipeline.id), "runs").slice(0, 100);
-        return runs.map(run => runNode(run, element.pipeline));
+        return runs.map(run => runNode(run, element.pipeline, workspaceFolder));
       }
 
       if (element.log) {
@@ -224,8 +318,8 @@ class PipelineProvider {
     return [];
   }
 
-  async getPipelinesForBranch(api) {
-    const branch = await this.getBranch();
+  async getPipelinesForBranch(api, workspaceFolder) {
+    const branch = await this.getBranch(workspaceFolder);
     if (!branch) {
       return [informationNode("No Git branch detected", "Open a Git repository to filter runs by branch")];
     }
@@ -260,32 +354,60 @@ class PipelineProvider {
       }
       grouped.get(key).runs.push(run);
     }
-    this.branchRuns = new Map([...grouped].map(([id, item]) => [id, item.runs]));
-    return [...grouped.values()].map(item => pipelineNode(item.pipeline, this.getPinnedIds()));
+    const workspaceKey = workspaceFolder?.uri.toString() || "";
+    for (const key of this.branchRuns.keys()) {
+      if (key.startsWith(`${workspaceKey}:`)) {
+        this.branchRuns.delete(key);
+      }
+    }
+    for (const [id, item] of grouped) {
+      this.branchRuns.set(
+        this.pipelineKey({id}, workspaceFolder),
+        item.runs
+      );
+    }
+    return [...grouped.values()].map(item => pipelineNode(
+      item.pipeline,
+      this.getPinnedIds(),
+      workspaceFolder
+    ));
   }
 
   async getTimeline(api, run, timelineId) {
-    const key = `${run.id}:${timelineId || ""}`;
+    const key = `${api.organization}/${api.project}:${run.id}:${timelineId || ""}`;
     if (!this.timelines.has(key)) {
       this.timelines.set(key, api.getBuildTimeline(run.id, timelineId).catch(() => undefined));
     }
     return this.timelines.get(key);
   }
 
+  pipelineKey(pipeline, workspaceFolder) {
+    return `${workspaceFolder?.uri.toString() || ""}:${pipeline.id}`;
+  }
+
   async getRunDetails(api, run, pipeline) {
     const timeline = await this.getTimeline(api, run);
+    const artifacts = artifactsNode(run, pipeline, pipeline.workspaceFolder);
     const records = timeline?.records || [];
     if (records.length) {
       const rootRecords = orderedRecords(records.filter(record => !record.parentId));
-      return rootRecords.map(record => {
-        return recordNode(record, records.some(child => child.parentId === record.id), run, pipeline);
-      });
+      return [
+        ...rootRecords.map(record => recordNode(
+          record,
+          records.some(child => child.parentId === record.id),
+          run,
+          pipeline,
+          undefined,
+          pipeline.workspaceFolder
+        )),
+        artifacts
+      ];
     }
 
     try {
       const logResponse = await api.listPipelineLogs(pipeline.id, run.id);
       const logs = responseItems(logResponse, "logs");
-      return logs.map(log => {
+      return [...logs.map(log => {
         const item = new vscode.TreeItem(
           log.name || `Log ${log.id}`,
           vscode.TreeItemCollapsibleState.None
@@ -302,17 +424,22 @@ class PipelineProvider {
         item.log = log;
         item.run = run;
         item.pipeline = pipeline;
+        item.workspaceFolder = pipeline.workspaceFolder;
         return item;
-      });
+      }), artifacts];
     } catch {
-      return [informationNode("Run details unavailable", "Timeline and logs are not available for this run")];
+      return [
+        informationNode("Run details unavailable", "Timeline and logs are not available for this run"),
+        artifacts
+      ];
     }
   }
 }
 
 class LibraryProvider {
-  constructor({getApi}) {
+  constructor({getApi, getWorkspaceFolders}) {
     this.getApi = getApi;
+    this.getWorkspaceFolders = getWorkspaceFolders;
     this.onDidChangeTreeDataEmitter = new vscode.EventEmitter();
     this.onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
   }
@@ -326,16 +453,38 @@ class LibraryProvider {
   }
 
   async getChildren(element) {
-    const api = await this.getApi(false);
+    if (!element) {
+      const folders = this.getWorkspaceFolders?.() || [];
+      if (folders.length > 1) {
+        const connections = await Promise.all(folders.map(folder => this.getApi(false, folder)));
+        const projects = new Set(connections.filter(Boolean).map(api =>
+          `${api.organization.toLowerCase()}/${api.project.toLowerCase()}`
+        ));
+        if (projects.size > 1) {
+          return folders.map(workspaceNode);
+        }
+      }
+    }
+    const workspaceFolder = element?.workspaceFolder;
+    const api = await this.getApi(false, workspaceFolder);
     if (!api) {
-      return [informationNode("Configure Azure DevOps", "Organization, project, and authentication required", "azure-pipelines.configure")];
+      return [informationNode(
+        "Configure Azure DevOps",
+        workspaceFolder
+          ? `No connection detected for ${workspaceFolder.name}`
+          : "Organization, project, and authentication required",
+        "azure-pipelines.configure",
+        workspaceFolder ? [{workspaceFolder}] : undefined
+      )];
     }
 
     try {
-      if (!element) {
-        const [environmentsResult, groupsResult] = await Promise.allSettled([
+      if (!element || element.contextValue === "azurePipelineWorkspace") {
+        const [environmentsResult, groupsResult, definitionsResult, approvalsResult] = await Promise.allSettled([
           api.listEnvironments(),
-          api.listVariableGroups()
+          api.listVariableGroups(),
+          api.listBuildDefinitions(),
+          api.listPendingApprovals()
         ]);
         return [
           this.groupNode(
@@ -344,7 +493,8 @@ class LibraryProvider {
             environmentsResult.status === "fulfilled"
               ? responseItems(environmentsResult.value, "environments")
               : [],
-            environmentsResult.status === "rejected" ? environmentsResult.reason.message : undefined
+            environmentsResult.status === "rejected" ? environmentsResult.reason.message : undefined,
+            workspaceFolder
           ),
           this.groupNode(
             "Variable Groups",
@@ -352,9 +502,72 @@ class LibraryProvider {
             groupsResult.status === "fulfilled"
               ? responseItems(groupsResult.value, "variableGroups")
               : [],
-            groupsResult.status === "rejected" ? groupsResult.reason.message : undefined
+            groupsResult.status === "rejected" ? groupsResult.reason.message : undefined,
+            workspaceFolder
+          ),
+          this.groupNode(
+            "Pipeline Variables",
+            "pipelineDefinitions",
+            definitionsResult.status === "fulfilled"
+              ? responseItems(definitionsResult.value, "definitions")
+              : [],
+            definitionsResult.status === "rejected" ? definitionsResult.reason.message : undefined,
+            workspaceFolder
+          ),
+          this.groupNode(
+            "Pending Approvals",
+            "approvals",
+            approvalsResult.status === "fulfilled"
+              ? responseItems(approvalsResult.value, "approvals")
+              : [],
+            approvalsResult.status === "rejected" ? approvalsResult.reason.message : undefined,
+            workspaceFolder
           )
         ];
+      }
+      if (element.section === "approvals") {
+        if (element.error) {
+          return [informationNode("Could not load approvals", element.error)];
+        }
+        return element.items.map(approval => {
+          const buildId = approval.pipeline?.owner?.id;
+          const pipelineName = approval.pipeline?.name;
+          const item = new vscode.TreeItem(
+            pipelineName || approval.instructions || `Approval ${String(approval.id).slice(0, 8)}`,
+            vscode.TreeItemCollapsibleState.None
+          );
+          item.id = `approval-${approval.id}`;
+          item.contextValue = "azurePipelineApproval";
+          item.description = [
+            buildId ? `Run #${buildId}` : "Pending",
+            approval.createdOn ? new Date(approval.createdOn).toLocaleString() : ""
+          ].filter(Boolean).join(" - ");
+          item.tooltip = [
+            approval.instructions,
+            ...(approval.steps || []).map(step =>
+              step.assignedApprover?.displayName
+                ? `Approver: ${step.assignedApprover.displayName}`
+                : ""
+            ),
+            approval.minRequiredApprovers
+              ? `Minimum approvers: ${approval.minRequiredApprovers}`
+              : ""
+          ].filter(Boolean).join("\n");
+          item.iconPath = new vscode.ThemeIcon("shield");
+          item.approval = approval;
+          item.workspaceFolder = workspaceFolder;
+          if (buildId) {
+            item.command = {
+              command: "azure-pipelines.openRun",
+              title: "Open Related Run",
+              arguments: [{
+                run: {id: buildId},
+                pipeline: {workspaceFolder}
+              }]
+            };
+          }
+          return item;
+        });
       }
       if (element.section === "environments") {
         if (element.error) {
@@ -364,13 +577,14 @@ class LibraryProvider {
           const item = new vscode.TreeItem(environment.name, vscode.TreeItemCollapsibleState.None);
           item.contextValue = "azureEnvironment";
           item.environment = environment;
+          item.workspaceFolder = workspaceFolder;
           item.description = environment.description || `Environment ${environment.id}`;
           item.iconPath = new vscode.ThemeIcon("cloud");
           item.tooltip = `Azure Pipelines environment ${environment.name}`;
           item.command = {
             command: "azure-pipelines.openEnvironment",
             title: "Open Environment in Browser",
-            arguments: [{environment}]
+            arguments: [{environment, workspaceFolder}]
           };
           return item;
         });
@@ -389,6 +603,46 @@ class LibraryProvider {
           item.description = group.type === "AzureKeyVault" ? "Key Vault" : `${Object.keys(group.variables || {}).length} variables`;
           item.iconPath = new vscode.ThemeIcon(group.type === "AzureKeyVault" ? "key" : "library");
           item.group = group;
+          item.workspaceFolder = workspaceFolder;
+          return item;
+        });
+      }
+      if (element.section === "pipelineDefinitions") {
+        if (element.error) {
+          return [informationNode("Could not load pipeline definitions", element.error)];
+        }
+        return element.items.map(definition => {
+          const item = new vscode.TreeItem(
+            definition.name || `Pipeline ${definition.id}`,
+            vscode.TreeItemCollapsibleState.Collapsed
+          );
+          item.id = `pipeline-definition-${definition.id}`;
+          item.contextValue = "azurePipelineDefinitionVariables";
+          item.description = `Definition ${definition.id}`;
+          item.iconPath = new vscode.ThemeIcon("symbol-namespace");
+          item.definition = definition;
+          item.workspaceFolder = workspaceFolder;
+          return item;
+        });
+      }
+      if (element.definition) {
+        const definition = await api.getBuildDefinition(element.definition.id);
+        return Object.entries(definition.variables || {}).map(([name, variable]) => {
+          const isSecret = Boolean(variable.isSecret);
+          const item = new vscode.TreeItem(name, vscode.TreeItemCollapsibleState.None);
+          item.id = `pipeline-variable-${definition.id}-${name}`;
+          item.contextValue = isSecret
+            ? "azurePipelineVariableSecret"
+            : "azurePipelineVariable";
+          item.description = isSecret ? "Secret (value hidden)" : (variable.value ?? "");
+          item.tooltip = isSecret
+            ? "Secret value is hidden by Azure DevOps"
+            : `Value: ${variable.value ?? ""}`;
+          item.iconPath = new vscode.ThemeIcon(isSecret ? "lock" : "symbol-variable");
+          item.definition = definition;
+          item.variableName = name;
+          item.variable = variable;
+          item.workspaceFolder = workspaceFolder;
           return item;
         });
       }
@@ -404,6 +658,7 @@ class LibraryProvider {
           item.group = element.group;
           item.variableName = name;
           item.variable = variable;
+          item.workspaceFolder = workspaceFolder;
           return item;
         });
       }
@@ -413,14 +668,25 @@ class LibraryProvider {
     return [];
   }
 
-  groupNode(label, section, items, error) {
+  groupNode(label, section, items, error, workspaceFolder) {
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Collapsed);
     item.id = section;
     item.section = section;
     item.items = items;
     item.error = error;
-    item.contextValue = section === "environments" ? "azureEnvironments" : "azureVariableGroups";
-    item.iconPath = new vscode.ThemeIcon(section === "environments" ? "cloud" : "library");
+    item.workspaceFolder = workspaceFolder;
+    item.contextValue = {
+      environments: "azureEnvironments",
+      variableGroups: "azureVariableGroups",
+      pipelineDefinitions: "azurePipelineDefinitions",
+      approvals: "azurePipelineApprovals"
+    }[section];
+    item.iconPath = {
+      environments: new vscode.ThemeIcon("cloud"),
+      variableGroups: new vscode.ThemeIcon("library"),
+      pipelineDefinitions: new vscode.ThemeIcon("symbol-namespace"),
+      approvals: new vscode.ThemeIcon("shield")
+    }[section];
     item.description = error ? "Unavailable" : String(items.length);
     return item;
   }

@@ -20,7 +20,7 @@
   ],
   "scripts": {
     "test": "node --test",
-    "check": "node --check src/api.js && node --check src/helpers.js && node --check src/yamlSupport.js && node --check src/providers.js && node --check src/extension.js",
+    "check": "node --check src/api.js && node --check src/git.js && node --check src/helpers.js && node --check src/logViewer.js && node --check src/yamlSupport.js && node --check src/providers.js && node --check src/extension.js",
     "build": "esbuild ./src/extension.js --bundle --platform=node --target=node18 --external:vscode --outfile=dist/extension.js",
     "vscode:prepublish": "npm run check && npm run build && npm test"
   },
@@ -138,6 +138,16 @@
         "category": "Azure Pipelines"
       },
       {
+        "command": "azure-pipelines.retryStage",
+        "title": "Retry Stage",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.retryJob",
+        "title": "Retry Failed Jobs in Stage",
+        "category": "Azure Pipelines"
+      },
+      {
         "command": "azure-pipelines.openLogs",
         "title": "Open Logs",
         "category": "Azure Pipelines"
@@ -145,6 +155,21 @@
       {
         "command": "azure-pipelines.openLogsInBrowser",
         "title": "Open Step in Browser",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.downloadArtifact",
+        "title": "Download Pipeline Artifact",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.approveApproval",
+        "title": "Approve Pipeline Gate",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.rejectApproval",
+        "title": "Reject Pipeline Gate",
         "category": "Azure Pipelines"
       },
       {
@@ -180,6 +205,21 @@
       {
         "command": "azure-pipelines.copyVariableValue",
         "title": "Copy Variable Value",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.addPipelineVariable",
+        "title": "Add Pipeline Variable",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.updatePipelineVariable",
+        "title": "Update Pipeline Variable",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.deletePipelineVariable",
+        "title": "Delete Pipeline Variable",
         "category": "Azure Pipelines"
       }
     ],
@@ -250,6 +290,18 @@
           "when": "viewItem == azurePipelineRunCompleted"
         },
         {
+          "command": "azure-pipelines.retryStage",
+          "when": "viewItem == azurePipelineStageRetry"
+        },
+        {
+          "command": "azure-pipelines.retryJob",
+          "when": "viewItem == azurePipelineJobRetry"
+        },
+        {
+          "command": "azure-pipelines.downloadArtifact",
+          "when": "viewItem == azurePipelineArtifact"
+        },
+        {
           "command": "azure-pipelines.openLogs",
           "when": "viewItem == azurePipelineLog"
         },
@@ -294,6 +346,34 @@
         {
           "command": "azure-pipelines.copyVariableValue",
           "when": "viewItem == azureLibraryVariable"
+        },
+        {
+          "command": "azure-pipelines.approveApproval",
+          "when": "viewItem == azurePipelineApproval"
+        },
+        {
+          "command": "azure-pipelines.rejectApproval",
+          "when": "viewItem == azurePipelineApproval"
+        },
+        {
+          "command": "azure-pipelines.addPipelineVariable",
+          "when": "viewItem == azurePipelineDefinitionVariables"
+        },
+        {
+          "command": "azure-pipelines.updatePipelineVariable",
+          "when": "viewItem =~ /azurePipelineVariable/"
+        },
+        {
+          "command": "azure-pipelines.deletePipelineVariable",
+          "when": "viewItem =~ /azurePipelineVariable/"
+        },
+        {
+          "command": "azure-pipelines.copyVariable",
+          "when": "viewItem =~ /azurePipelineVariable/"
+        },
+        {
+          "command": "azure-pipelines.copyVariableValue",
+          "when": "viewItem == azurePipelineVariable"
         }
       ]
     },
@@ -324,6 +404,11 @@
           "default": 60,
           "minimum": 0,
           "description": "Automatic refresh interval in seconds (minimum 30). Set to 0 to disable polling."
+        },
+        "azure-pipelines.customSchemaFile": {
+          "type": "string",
+          "default": "",
+          "description": "Workspace-relative path to the organization-specific Azure Pipelines YAML schema."
         }
       }
     },
@@ -387,7 +472,14 @@
 const API_VERSION = "7.1";
 
 class AzureDevOpsApi {
-  constructor({organization, project, token, authType = "pat", fetchImpl = globalThis.fetch}) {
+  constructor({
+    organization,
+    project,
+    token,
+    authType = "pat",
+    fetchImpl = globalThis.fetch,
+    workspaceFolder
+  }) {
     if (!organization || !project || !token) {
       throw new Error("Azure DevOps organization, project, and an access token are required.");
     }
@@ -399,6 +491,7 @@ class AzureDevOpsApi {
     this.project = project.trim();
     this.token = token;
     this.authType = authType;
+    this.workspaceFolder = workspaceFolder;
     this.fetch = fetchImpl;
     this.projectDetails = undefined;
     this.resolvedProjectId = undefined;
@@ -463,6 +556,25 @@ class AzureDevOpsApi {
     return this.request(this.projectUrl("pipelines", {$top: 200}));
   }
 
+  listBuildDefinitions() {
+    return this.request(this.projectUrl("build/definitions", {$top: 200}));
+  }
+
+  getBuildDefinition(definitionId) {
+    return this.request(this.projectUrl(
+      `build/definitions/${encodeURIComponent(definitionId)}`
+    ));
+  }
+
+  updateBuildDefinition(definition) {
+    return this.request(this.projectUrl(
+      `build/definitions/${encodeURIComponent(definition.id)}`
+    ), {
+      method: "PUT",
+      body: definition
+    });
+  }
+
   async getProject() {
     if (!this.projectDetails) {
       this.projectDetails = await this.request(
@@ -491,7 +603,7 @@ class AzureDevOpsApi {
     return this.request(this.projectUrl("build/builds", {
       branchName,
       $top: 100,
-      queryOrder: "finishTimeDescending"
+      queryOrder: "queueTimeDescending"
     }));
   }
 
@@ -548,15 +660,74 @@ class AzureDevOpsApi {
     return this.request(this.organizationUrl("distributedtask/yamlschema"));
   }
 
+  listTaskDefinitions() {
+    return this.request(this.organizationUrl("distributedtask/tasks"));
+  }
+
   getBuildTimeline(runId, timelineId) {
     const timeline = timelineId ? `/timeline/${encodeURIComponent(timelineId)}` : "/timeline";
     return this.request(this.projectUrl(`build/builds/${encodeURIComponent(runId)}${timeline}`));
   }
 
-  getBuildLog(runId, logId) {
+  getBuild(runId) {
+    return this.request(this.projectUrl(`build/builds/${encodeURIComponent(runId)}`));
+  }
+
+  getBuildLog(runId, logId, startLine) {
     return this.request(this.projectUrl(
-      `build/builds/${encodeURIComponent(runId)}/logs/${encodeURIComponent(logId)}`
+      `build/builds/${encodeURIComponent(runId)}/logs/${encodeURIComponent(logId)}`,
+      startLine === undefined ? {} : {startLine}
     ), {accept: "text/plain"});
+  }
+
+  listBuildArtifacts(runId) {
+    return this.request(this.projectUrl(
+      `build/builds/${encodeURIComponent(runId)}/artifacts`
+    ));
+  }
+
+  async downloadBuildArtifact(runId, artifactName) {
+    const url = this.projectUrl(
+      `build/builds/${encodeURIComponent(runId)}/artifacts`,
+      {artifactName, "$format": "zip"}
+    );
+    const authorization = this.authType === "bearer"
+      ? `Bearer ${this.token}`
+      : `Basic ${Buffer.from(`:${this.token}`).toString("base64")}`;
+    const response = await this.fetch(url, {
+      headers: {Authorization: authorization, Accept: "application/zip"}
+    });
+    if (!response.ok) {
+      throw new Error(`Could not download the artifact (${response.status}).`);
+    }
+    return Buffer.from(await response.arrayBuffer());
+  }
+
+  retryStage(runId, stageRefName, {forceRetryAllJobs = false} = {}) {
+    return this.request(this.projectUrl(
+      `build/builds/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageRefName)}`
+    ), {
+      method: "PATCH",
+      body: {state: "retry", forceRetryAllJobs}
+    });
+  }
+
+  listPendingApprovals() {
+    return this.request(this.projectUrl("pipelines/approvals", {
+      state: "pending",
+      "$expand": "steps"
+    }));
+  }
+
+  updateApproval(approvalId, status, comment) {
+    return this.request(this.projectUrl("pipelines/approvals"), {
+      method: "PATCH",
+      body: [{
+        approvalId,
+        status,
+        comment: comment || undefined
+      }]
+    });
   }
 
   cancelRun(runId) {
@@ -659,18 +830,28 @@ module.exports = {API_VERSION, AzureDevOpsApi};
 "use strict";
 
 const {execFile} = require("child_process");
+const crypto = require("crypto");
+const os = require("os");
+const path = require("path");
 const {promisify} = require("util");
 const vscode = require("vscode");
 const {AzureDevOpsApi} = require("./api");
 const {normalizeVariables, parseJsonObject, webLogUrl, webRunUrl} = require("./helpers");
+const {parseGitRemotes} = require("./git");
+const {mergeLogContent, renderErrors, renderLogBody, renderLogHtml} = require("./logViewer");
 const {LibraryProvider, PipelineProvider, responseItems} = require("./providers");
 const {
   getExpressionCompletions,
   getExpressionDiagnostics,
   getExpressionHover,
+  getTemplateReferenceAt,
+  getTaskInputCompletions,
+  getTaskInputDiagnostics,
   getParameterDefinitions,
   isAzurePipelineDocument,
+  isTaskInputCompletionPosition,
   parameterPromptKind,
+  resolveTemplatePaths,
   typedParameterValue
 } = require("./yamlSupport");
 
@@ -689,14 +870,50 @@ function getRunArgument(argument) {
   return argument?.run;
 }
 
-async function currentGitBranch() {
-  const folder = vscode.workspace.workspaceFolders?.[0];
-  if (!folder) {
+function activeWorkspaceFolder() {
+  const uri = vscode.window.activeTextEditor?.document.uri;
+  return uri ? vscode.workspace.getWorkspaceFolder(uri) : undefined;
+}
+
+async function currentGitBranch(folder) {
+  const folders = vscode.workspace.workspaceFolders || [];
+  const target = folder || activeWorkspaceFolder() || (folders.length === 1 ? folders[0] : undefined);
+  if (!target) {
     return undefined;
   }
+
+  let repositoryRoot;
+  try {
+    const gitExtension = vscode.extensions.getExtension("vscode.git");
+    if (gitExtension) {
+      const git = gitExtension.isActive
+        ? gitExtension.exports
+        : await gitExtension.activate();
+      const api = git.getAPI(1);
+      const root = target.uri.fsPath.toLowerCase();
+      const repositories = api.repositories.map(item => ({
+        item,
+        root: item.rootUri.fsPath.toLowerCase()
+      }));
+      const ancestors = repositories.filter(repository =>
+        root === repository.root || root.startsWith(`${repository.root}${path.sep.toLowerCase()}`)
+      ).sort((left, right) => right.root.length - left.root.length);
+      const descendants = repositories.filter(repository =>
+        repository.root.startsWith(`${root}${path.sep.toLowerCase()}`)
+      );
+      const repository = ancestors[0]?.item || (descendants.length === 1 ? descendants[0].item : undefined);
+      if (repository?.state.HEAD?.name) {
+        return repository.state.HEAD.name;
+      }
+      repositoryRoot = repository?.rootUri.fsPath;
+    }
+  } catch {
+    // Fall back to Git CLI when the built-in Git extension is unavailable.
+  }
+
   try {
     const {stdout} = await execFileAsync("git", ["branch", "--show-current"], {
-      cwd: folder.uri.fsPath,
+      cwd: repositoryRoot || target.uri.fsPath,
       windowsHide: true,
       timeout: 3000
     });
@@ -708,8 +925,11 @@ async function currentGitBranch() {
 
 function activate(context) {
   const secretStorage = context.secrets;
-  const getConnectionValues = async () => {
-    const settings = vscode.workspace.getConfiguration("azure-pipelines");
+  const readConnectionValues = async folder => {
+    const settings = vscode.workspace.getConfiguration(
+      "azure-pipelines",
+      folder?.uri
+    );
     const authMethod = settings.get("authMethod", "pat");
     let token;
     if (authMethod === "microsoft") {
@@ -726,22 +946,102 @@ function activate(context) {
     } else {
       token = await secretStorage.get(PAT_SECRET_KEY);
     }
+    let organization = settings.get("organization", "").trim();
+    let project = settings.get("project", "").trim();
+    let repository;
+    if (!organization || !project) {
+      const remoteValues = await getAzureDevOpsRemotes(folder);
+      if (remoteValues.length === 1) {
+        organization ||= remoteValues[0].organization;
+        project ||= remoteValues[0].project;
+        repository = remoteValues[0].repository;
+      }
+    }
     return {
-      organization: settings.get("organization", "").trim(),
-      project: settings.get("project", "").trim(),
+      organization,
+      project,
+      repository,
+      workspaceFolder: folder,
       token,
       authMethod,
       authType: authMethod === "microsoft" ? "bearer" : "pat"
     };
   };
 
+  const getAzureDevOpsRemotes = async folder => {
+    if (!folder) {
+      return [];
+    }
+    try {
+      const {stdout} = await execFileAsync("git", [
+        "config",
+        "--get-regexp",
+        "^remote\\..*\\.url$"
+      ], {
+        cwd: folder.uri.fsPath,
+        windowsHide: true,
+        timeout: 3000
+      });
+      return parseGitRemotes(stdout);
+    } catch {
+      return [];
+    }
+  };
+
+  const getConnectionValues = async folder => {
+    if (folder) {
+      return readConnectionValues(folder);
+    }
+
+    const activeFolder = activeWorkspaceFolder();
+    if (activeFolder) {
+      return readConnectionValues(activeFolder);
+    }
+
+    const folders = vscode.workspace.workspaceFolders || [];
+    if (folders.length === 1) {
+      return readConnectionValues(folders[0]);
+    }
+
+    const settings = vscode.workspace.getConfiguration("azure-pipelines");
+    const configuredOrganization = settings.get("organization", "").trim();
+    const configuredProject = settings.get("project", "").trim();
+    if (configuredOrganization && configuredProject) {
+      return readConnectionValues(undefined);
+    }
+
+    const detected = await Promise.all(folders.map(readConnectionValues));
+    const unique = new Map(detected
+      .filter(values => values.organization && values.project)
+      .map(values => [
+        `${values.organization.toLowerCase()}/${values.project.toLowerCase()}`,
+        values
+      ]));
+    return unique.size === 1 ? unique.values().next().value : readConnectionValues(undefined);
+  };
+
   let configuring;
-  const configureConnection = async () => {
+  const configureConnection = async argument => {
     if (configuring) {
       return configuring;
     }
     configuring = (async () => {
-      const values = await getConnectionValues();
+      const folders = vscode.workspace.workspaceFolders || [];
+      let targetFolder = argument?.workspaceFolder || activeWorkspaceFolder();
+      if (!targetFolder && folders.length > 1) {
+        const selected = await vscode.window.showQuickPick(folders.map(folder => ({
+          label: folder.name,
+          description: folder.uri.fsPath,
+          folder
+        })), {placeHolder: "Choose the workspace folder to configure"});
+        targetFolder = selected?.folder;
+        if (!targetFolder) {
+          return false;
+        }
+      } else if (!targetFolder && folders.length === 1) {
+        targetFolder = folders[0];
+      }
+      const values = await getConnectionValues(targetFolder);
       const organization = await vscode.window.showInputBox({
         title: "Azure DevOps connection",
         prompt: "Organization name from https://dev.azure.com/{organization}",
@@ -753,7 +1053,9 @@ function activate(context) {
       }
       const project = await vscode.window.showInputBox({
         title: "Azure DevOps connection",
-        prompt: "Project name or ID",
+        prompt: values.repository
+          ? `Detected from Git remote for repository "${values.repository}"`
+          : "Project name or ID",
         value: values.project,
         ignoreFocusOut: true
       });
@@ -798,10 +1100,12 @@ function activate(context) {
         token = enteredPat.trim() || savedPat;
       }
 
-      const target = vscode.workspace.workspaceFolders?.length
-        ? vscode.ConfigurationTarget.Workspace
-        : vscode.ConfigurationTarget.Global;
-      const settings = vscode.workspace.getConfiguration("azure-pipelines");
+      const target = targetFolder
+        ? vscode.ConfigurationTarget.WorkspaceFolder
+        : vscode.workspace.workspaceFolders?.length
+          ? vscode.ConfigurationTarget.Workspace
+          : vscode.ConfigurationTarget.Global;
+      const settings = vscode.workspace.getConfiguration("azure-pipelines", targetFolder?.uri);
       await settings.update("organization", organization.trim(), target);
       await settings.update("project", project.trim(), target);
       await settings.update("authMethod", selectedAuth.value, target);
@@ -812,7 +1116,7 @@ function activate(context) {
         `Azure DevOps connection saved using ${selectedAuth.label}.`
       );
       refreshAll();
-      return true;
+      return targetFolder || true;
     })();
     try {
       return await configuring;
@@ -821,16 +1125,18 @@ function activate(context) {
     }
   };
 
-  const getApi = async (promptForSetup = false) => {
-    let values = await getConnectionValues();
+  const getApi = async (promptForSetup = false, folder) => {
+    let values = await getConnectionValues(folder);
     if ((!values.organization || !values.project || !values.token) && promptForSetup) {
       const answer = await vscode.window.showWarningMessage(
         "Configure an Azure DevOps organization, project, and authentication method to use pipeline features.",
         "Configure"
       );
       if (answer === "Configure") {
-        await configureConnection();
-        values = await getConnectionValues();
+        const configuredFolder = await configureConnection({workspaceFolder: folder});
+        values = await getConnectionValues(
+          folder || (configuredFolder?.uri ? configuredFolder : undefined)
+        );
       }
     }
     if (!values.organization || !values.project || !values.token) {
@@ -845,7 +1151,7 @@ function activate(context) {
     const selected = await vscode.window.showQuickPick(pipelines.map(pipeline => ({
       label: pipeline.name,
       description: pipeline.folder || `Pipeline ${pipeline.id}`,
-      pipeline
+      pipeline: {...pipeline, workspaceFolder: api.workspaceFolder}
     })), {placeHolder: "Select an Azure Pipeline"});
     return selected?.pipeline;
   };
@@ -853,7 +1159,9 @@ function activate(context) {
   const findPipelineYaml = async (api, pipeline) => {
     const details = await api.getPipeline(pipeline.id);
     const configuredPath = details.configuration?.path?.replace(/^[/\\]+/, "");
-    const folders = vscode.workspace.workspaceFolders || [];
+    const folders = pipeline.workspaceFolder
+      ? [pipeline.workspaceFolder]
+      : vscode.workspace.workspaceFolders || [];
     let matches = [];
     if (configuredPath) {
       for (const folder of folders) {
@@ -947,20 +1255,25 @@ function activate(context) {
 
   const getPinned = () => context.workspaceState.get("azure-pipelines.pinned", []);
   const getPinnedIds = () => new Set(getPinned().map(item => Number(item.id)));
+  const getWorkspaceFolders = () => vscode.workspace.workspaceFolders || [];
   const pipelinesProvider = new PipelineProvider({
     getApi,
     getPinnedIds,
     currentBranch: false,
-    getBranch: currentGitBranch
+    getBranch: currentGitBranch,
+    getWorkspaceFolders
   });
   const branchProvider = new PipelineProvider({
     getApi,
     getPinnedIds,
     currentBranch: true,
-    getBranch: currentGitBranch
+    getBranch: currentGitBranch,
+    getWorkspaceFolders
   });
-  const libraryProvider = new LibraryProvider({getApi});
+  const libraryProvider = new LibraryProvider({getApi, getWorkspaceFolders});
   let variableNamesCache = {expires: 0, names: []};
+  let taskCatalogCache = {organization: "", expires: 0, definitions: []};
+  let taskCatalogRequest;
   context.subscriptions.push(libraryProvider.onDidChangeTreeData(() => {
     variableNamesCache.expires = 0;
   }));
@@ -983,25 +1296,128 @@ function activate(context) {
       return [];
     }
   };
+  const getTaskDefinitions = async () => {
+    const organization = vscode.workspace.getConfiguration("azure-pipelines")
+      .get("organization", "").trim().toLowerCase();
+    if (!organization) {
+      return [];
+    }
+    if (taskCatalogCache.organization === organization && taskCatalogCache.expires > Date.now()) {
+      return taskCatalogCache.definitions;
+    }
+    if (taskCatalogRequest?.organization === organization) {
+      return taskCatalogRequest.promise;
+    }
+    const promise = (async () => {
+      try {
+        const api = await getApi(false);
+        if (!api) {
+          taskCatalogCache = {
+            organization,
+            expires: Date.now() + 60 * 1000,
+            definitions: []
+          };
+          return [];
+        }
+        const definitions = responseItems(await api.listTaskDefinitions(), "tasks");
+        taskCatalogCache = {
+          organization,
+          expires: Date.now() + 60 * 60 * 1000,
+          definitions
+        };
+        return definitions;
+      } catch {
+        taskCatalogCache = {
+          organization,
+          expires: Date.now() + 60 * 1000,
+          definitions: []
+        };
+        return [];
+      }
+    })();
+    taskCatalogRequest = {organization, promise};
+    try {
+      return await promise;
+    } finally {
+      if (taskCatalogRequest?.promise === promise) {
+        taskCatalogRequest = undefined;
+      }
+    }
+  };
 
-  vscode.window.registerTreeDataProvider("azure-pipelines.pipelines", pipelinesProvider);
-  vscode.window.registerTreeDataProvider("azure-pipelines.currentBranch", branchProvider);
-  vscode.window.registerTreeDataProvider("azure-pipelines.settings", libraryProvider);
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider("azure-pipelines.pipelines", pipelinesProvider),
+    vscode.window.registerTreeDataProvider("azure-pipelines.currentBranch", branchProvider),
+    vscode.window.registerTreeDataProvider("azure-pipelines.settings", libraryProvider)
+  );
+
+  const gitRepositorySubscriptions = new Map();
+  const watchGitRepository = repository => {
+    if (gitRepositorySubscriptions.has(repository)) {
+      return;
+    }
+    const subscription = repository.state?.onDidChange?.(() => branchProvider.refresh());
+    if (subscription) {
+      gitRepositorySubscriptions.set(repository, subscription);
+      context.subscriptions.push(subscription);
+    }
+  };
+  const connectGitApi = async () => {
+    const extension = vscode.extensions.getExtension("vscode.git");
+    if (!extension) {
+      return;
+    }
+    try {
+      const git = extension.isActive ? extension.exports : await extension.activate();
+      const api = git.getAPI(1);
+      api.repositories.forEach(watchGitRepository);
+      if (api.onDidOpenRepository) {
+        context.subscriptions.push(api.onDidOpenRepository(watchGitRepository));
+      }
+      if (api.onDidCloseRepository) {
+        context.subscriptions.push(api.onDidCloseRepository(repository => {
+          gitRepositorySubscriptions.get(repository)?.dispose();
+          gitRepositorySubscriptions.delete(repository);
+          branchProvider.refresh();
+        }));
+      }
+    } catch {
+      // Branch changes still refresh when the user manually refreshes the tree.
+    }
+  };
+  void connectGitApi();
+  context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
+    pipelinesProvider.refresh();
+    branchProvider.refresh();
+  }));
 
   const expressionDiagnostics = vscode.languages.createDiagnosticCollection("azure-pipelines");
   context.subscriptions.push(expressionDiagnostics);
-  const validateYamlDocument = document => {
+  const validateYamlDocument = async document => {
     const text = document.getText();
     if (!isAzurePipelineDocument(document.uri, text)) {
       expressionDiagnostics.delete(document.uri);
       return;
     }
+    const version = document.version;
     const diagnostics = getExpressionDiagnostics(text).map(item => new vscode.Diagnostic(
       new vscode.Range(document.positionAt(item.start), document.positionAt(item.end)),
       item.message,
       vscode.DiagnosticSeverity.Warning
     ));
     expressionDiagnostics.set(document.uri, diagnostics);
+    if (/^\s*-\s*task\s*:/m.test(text)) {
+      const definitions = await getTaskDefinitions();
+      if (document.version !== version) {
+        return;
+      }
+      diagnostics.push(...getTaskInputDiagnostics(text, definitions).map(item => new vscode.Diagnostic(
+        new vscode.Range(document.positionAt(item.start), document.positionAt(item.end)),
+        item.message,
+        vscode.DiagnosticSeverity.Warning
+      )));
+      expressionDiagnostics.set(document.uri, diagnostics);
+    }
   };
   context.subscriptions.push(
     vscode.workspace.onDidOpenTextDocument(validateYamlDocument),
@@ -1023,6 +1439,10 @@ function activate(context) {
         const offset = document.offsetAt(position);
         const prefix = text.slice(0, offset);
         const candidates = getExpressionCompletions(text, offset);
+        if (isTaskInputCompletionPosition(text, offset)) {
+          const definitions = await getTaskDefinitions();
+          candidates.push(...getTaskInputCompletions(text, offset, definitions));
+        }
         if (/\bvariables\.[A-Za-z0-9_.-]*$/.test(prefix) || /\$\([^)]*$/.test(prefix)) {
           const names = await getVariableNames();
           candidates.push(...names.map(label => ({
@@ -1032,7 +1452,10 @@ function activate(context) {
           })));
         }
         return candidates.map(candidate => {
-          const item = new vscode.CompletionItem(candidate.label, vscode.CompletionItemKind.Function);
+          const kind = candidate.kind === "property"
+            ? vscode.CompletionItemKind.Property
+            : vscode.CompletionItemKind.Function;
+          const item = new vscode.CompletionItem(candidate.label, kind);
           item.insertText = candidate.insertText;
           item.detail = candidate.detail;
           if (candidate.documentation) {
@@ -1042,7 +1465,7 @@ function activate(context) {
         });
       }
     },
-    "$", "{", ".", "[", "("
+    "$", "{", ".", "[", "(", " "
   ));
   context.subscriptions.push(vscode.languages.registerHoverProvider(
     [
@@ -1059,6 +1482,42 @@ function activate(context) {
         return result
           ? new vscode.Hover(new vscode.MarkdownString(`**${result.title}**\n\n${result.body}`))
           : undefined;
+      }
+    }
+  ));
+  context.subscriptions.push(vscode.languages.registerDefinitionProvider(
+    [
+      {language: "yaml", scheme: "file"},
+      {language: "azure-pipelines", scheme: "file"}
+    ],
+    {
+      async provideDefinition(document, position) {
+        const text = document.getText();
+        if (!isAzurePipelineDocument(document.uri, text)) {
+          return undefined;
+        }
+        const reference = getTemplateReferenceAt(text, document.offsetAt(position));
+        if (!reference) {
+          return undefined;
+        }
+        const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+        const candidates = resolveTemplatePaths(
+          reference.path,
+          document.uri.fsPath,
+          workspaceFolder?.uri.fsPath
+        );
+        for (const candidate of candidates) {
+          const uri = vscode.Uri.file(candidate);
+          try {
+            const stat = await vscode.workspace.fs.stat(uri);
+            if (stat.type & vscode.FileType.File) {
+              return new vscode.Location(uri, new vscode.Position(0, 0));
+            }
+          } catch {
+            // Try the next supported path base.
+          }
+        }
+        return undefined;
       }
     }
   ));
@@ -1111,8 +1570,23 @@ function activate(context) {
 
   register("azure-pipelines.configure", configureConnection);
   register("azure-pipelines.disconnect", async () => {
+    const folders = vscode.workspace.workspaceFolders || [];
+    let folder = activeWorkspaceFolder();
+    if (!folder && folders.length === 1) {
+      folder = folders[0];
+    } else if (!folder && folders.length > 1) {
+      const selected = await vscode.window.showQuickPick(folders.map(candidate => ({
+        label: candidate.name,
+        description: candidate.uri.fsPath,
+        folder: candidate
+      })), {placeHolder: "Choose the workspace folder to disconnect"});
+      folder = selected?.folder;
+      if (!folder) {
+        return;
+      }
+    }
     const answer = await vscode.window.showWarningMessage(
-      "Clear this extension's organization, project, and PAT settings? This does not sign you out of VS Code's Microsoft account.",
+      `Clear Azure DevOps settings${folder ? ` for "${folder.name}"` : ""} and the stored PAT? This does not sign you out of VS Code's Microsoft account.`,
       {modal: true},
       "Disconnect"
     );
@@ -1120,19 +1594,34 @@ function activate(context) {
       return;
     }
     await secretStorage.delete(PAT_SECRET_KEY);
-    const settings = vscode.workspace.getConfiguration("azure-pipelines");
-    const target = vscode.workspace.workspaceFolders?.length
-      ? vscode.ConfigurationTarget.Workspace
-      : vscode.ConfigurationTarget.Global;
-    await settings.update("organization", "", target);
-    await settings.update("project", "", target);
-    await settings.update("authMethod", "pat", target);
+    const settings = vscode.workspace.getConfiguration("azure-pipelines", folder?.uri);
+    const targets = folder
+      ? [vscode.ConfigurationTarget.WorkspaceFolder]
+      : vscode.workspace.workspaceFolders?.length
+        ? [vscode.ConfigurationTarget.Workspace, vscode.ConfigurationTarget.Global]
+        : [vscode.ConfigurationTarget.Global];
+    for (const target of targets) {
+      await settings.update("organization", "", target);
+      await settings.update("project", "", target);
+      await settings.update("authMethod", "pat", target);
+    }
     refreshAll();
   });
   register("azure-pipelines.refresh", refreshAll);
   register("azure-pipelines.refreshSchema", async () => {
-    const api = await getApi(true);
-    const folder = vscode.workspace.workspaceFolders?.[0];
+    const folders = vscode.workspace.workspaceFolders || [];
+    let folder = activeWorkspaceFolder();
+    if (!folder && folders.length === 1) {
+      folder = folders[0];
+    } else if (!folder && folders.length > 1) {
+      const selected = await vscode.window.showQuickPick(folders.map(candidate => ({
+        label: candidate.name,
+        description: candidate.uri.fsPath,
+        folder: candidate
+      })), {placeHolder: "Choose the workspace folder for the downloaded schema"});
+      folder = selected?.folder;
+    }
+    const api = await getApi(true, folder);
     if (!api || !folder) {
       if (!folder) {
         void vscode.window.showErrorMessage("Open a workspace folder before downloading an organization schema.");
@@ -1155,10 +1644,11 @@ function activate(context) {
         schemaUri,
         Buffer.from(JSON.stringify(schema, null, 2), "utf8")
       );
-      const yamlSettings = vscode.workspace.getConfiguration("yaml");
+      const target = vscode.ConfigurationTarget.WorkspaceFolder;
+      const yamlSettings = vscode.workspace.getConfiguration("yaml", folder.uri);
       const mappings = {...yamlSettings.get("schemas", {})};
       delete mappings["https://raw.githubusercontent.com/microsoft/azure-pipelines-vscode/main/service-schema.json"];
-      mappings[`./${vscode.workspace.asRelativePath(schemaUri)}`] = [
+      mappings["./.vscode/azure-pipelines-schema.json"] = [
         "azure-pipelines.yml",
         "azure-pipelines.yaml",
         "**/azure-pipelines.yml",
@@ -1178,11 +1668,11 @@ function activate(context) {
         "**/*.azure-pipelines.yml",
         "**/*.azure-pipelines.yaml"
       ];
-      await yamlSettings.update("schemas", mappings, vscode.ConfigurationTarget.Workspace);
-      await vscode.workspace.getConfiguration("azure-pipelines").update(
+      await yamlSettings.update("schemas", mappings, target);
+      await vscode.workspace.getConfiguration("azure-pipelines", folder.uri).update(
         "customSchemaFile",
-        `./${vscode.workspace.asRelativePath(schemaUri)}`,
-        vscode.ConfigurationTarget.Workspace
+        "./.vscode/azure-pipelines-schema.json",
+        target
       );
       void vscode.window.showInformationMessage("Downloaded and configured the organization pipeline schema.");
     } catch (error) {
@@ -1229,7 +1719,7 @@ function activate(context) {
     if (!run) {
       return;
     }
-    const values = await getConnectionValues();
+    const values = await getConnectionValues(argument?.pipeline?.workspaceFolder);
     await vscode.env.openExternal(vscode.Uri.parse(webRunUrl(values.organization, values.project, run)));
   });
 
@@ -1238,13 +1728,13 @@ function activate(context) {
     if (!environment?.id) {
       return;
     }
-    const values = await getConnectionValues();
+    const values = await getConnectionValues(argument?.workspaceFolder);
     const url = `https://dev.azure.com/${encodeURIComponent(values.organization)}/${encodeURIComponent(values.project)}/_environments/${encodeURIComponent(environment.id)}`;
     await vscode.env.openExternal(vscode.Uri.parse(url));
   });
 
-  register("azure-pipelines.addEnvironment", async () => {
-    const api = await getApi(true);
+  register("azure-pipelines.addEnvironment", async argument => {
+    const api = await getApi(true, argument?.workspaceFolder);
     if (!api) {
       return;
     }
@@ -1292,7 +1782,7 @@ function activate(context) {
       return;
     }
     try {
-      const api = await getApi(true);
+      const api = await getApi(true, argument?.workspaceFolder);
       if (api) {
         await api.updateEnvironment(environment.id, {
           name: name.trim(),
@@ -1319,7 +1809,7 @@ function activate(context) {
       return;
     }
     try {
-      const api = await getApi(true);
+      const api = await getApi(true, argument?.workspaceFolder);
       if (api) {
         await api.deleteEnvironment(environment.id);
         libraryProvider.refresh();
@@ -1331,7 +1821,7 @@ function activate(context) {
 
   register("azure-pipelines.openDefinition", async argument => {
     let pipeline = getPipelineArgument(argument);
-    const api = await getApi(true);
+    const api = await getApi(true, pipeline?.workspaceFolder);
     if (!api) {
       return;
     }
@@ -1383,7 +1873,7 @@ function activate(context) {
 
   register("azure-pipelines.queuePipeline", async argument => {
     let pipeline = getPipelineArgument(argument);
-    const api = await getApi(true);
+    const api = await getApi(true, pipeline?.workspaceFolder);
     if (!api) {
       return;
     }
@@ -1396,7 +1886,7 @@ function activate(context) {
     const branch = await vscode.window.showInputBox({
       title: `Run ${pipeline.name}`,
       prompt: "Branch or ref to run",
-      value: await currentGitBranch() || "main",
+      value: await currentGitBranch(pipeline.workspaceFolder) || "main",
       ignoreFocusOut: true
     });
     if (!branch?.trim()) {
@@ -1433,7 +1923,6 @@ function activate(context) {
       const variableText = await vscode.window.showInputBox({
         title: `Run ${pipeline.name}`,
         prompt: "Optional run variables as a JSON object (leave blank to skip)",
-        password: true,
         ignoreFocusOut: true
       });
       if (variableText === undefined) {
@@ -1471,9 +1960,10 @@ function activate(context) {
       refreshAll();
       if (run?.id) {
         void vscode.window.showInformationMessage(`Queued ${pipeline.name} run #${run.id}.`);
+        const values = await getConnectionValues(pipeline.workspaceFolder);
         await vscode.env.openExternal(vscode.Uri.parse(webRunUrl(
-          (await getConnectionValues()).organization,
-          (await getConnectionValues()).project,
+          values.organization,
+          values.project,
           run
         )));
       }
@@ -1496,7 +1986,7 @@ function activate(context) {
       return;
     }
     try {
-      const api = await getApi(true);
+      const api = await getApi(true, argument?.pipeline?.workspaceFolder);
       if (api) {
         await api.cancelRun(run.id);
         refreshAll();
@@ -1520,7 +2010,7 @@ function activate(context) {
       return;
     }
     try {
-      const api = await getApi(true);
+      const api = await getApi(true, argument?.pipeline?.workspaceFolder);
       if (api) {
         await api.retryRun(run.id);
         refreshAll();
@@ -1530,34 +2020,245 @@ function activate(context) {
     }
   });
 
-  register("azure-pipelines.openLogs", async argument => {
-    const api = await getApi(true);
-    if (!api) {
+  const retryStageOrJob = async (argument, retryJob = false) => {
+    const run = argument?.run;
+    const pipeline = argument?.pipeline;
+    const record = argument?.record;
+    const stageRefName = argument?.stageRefName || record?.identifier || record?.name;
+    if (!run || !stageRefName) {
       return;
     }
+    if (run.state !== "completed") {
+      void vscode.window.showInformationMessage("A stage can only be retried after the run has completed.");
+      return;
+    }
+    const action = retryJob ? "Retry failed jobs in stage" : "Retry stage";
+    const answer = await vscode.window.showWarningMessage(
+      `${action} "${stageRefName}" in run #${run.id}?`,
+      {modal: true},
+      "Retry"
+    );
+    if (answer !== "Retry") {
+      return;
+    }
+    try {
+      const api = await getApi(true, pipeline?.workspaceFolder);
+      if (api) {
+        await api.retryStage(run.id, stageRefName);
+        refreshAll();
+      }
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not retry stage: ${error.message}`);
+    }
+  };
+  register("azure-pipelines.retryStage", argument => retryStageOrJob(argument));
+  register("azure-pipelines.retryJob", argument => retryStageOrJob(argument, true));
+
+  register("azure-pipelines.downloadArtifact", async argument => {
+    const artifact = argument?.artifact;
+    const run = argument?.run;
+    if (!artifact?.name || !run?.id) {
+      return;
+    }
+    try {
+      const api = await getApi(true, argument.pipeline?.workspaceFolder);
+      if (!api) {
+        return;
+      }
+      const safeName = `${String(artifact.name).replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")}.zip`;
+      const uri = await vscode.window.showSaveDialog({
+        saveLabel: "Download Artifact",
+        filters: {Zip: ["zip"]},
+        defaultUri: vscode.Uri.file(path.join(os.homedir(), safeName))
+      });
+      if (!uri) {
+        return;
+      }
+      const content = await api.downloadBuildArtifact(run.id, artifact.name);
+      await vscode.workspace.fs.writeFile(uri, content);
+      void vscode.window.showInformationMessage(`Downloaded "${artifact.name}" to ${uri.fsPath}.`);
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not download artifact: ${error.message}`);
+    }
+  });
+
+  const decideApproval = async (argument, status) => {
+    const approval = argument?.approval || argument;
+    if (!approval?.id) {
+      return;
+    }
+    const action = status === "approved" ? "Approve" : "Reject";
+    const answer = await vscode.window.showWarningMessage(
+      `${action} this Azure Pipelines approval gate?`,
+      {modal: true},
+      action
+    );
+    if (answer !== action) {
+      return;
+    }
+    const comment = await vscode.window.showInputBox({
+      prompt: "Optional approval comment",
+      ignoreFocusOut: true
+    });
+    if (comment === undefined) {
+      return;
+    }
+    try {
+      const api = await getApi(true, argument?.workspaceFolder);
+      if (api) {
+        await api.updateApproval(approval.id, status, comment);
+        libraryProvider.refresh();
+      }
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not ${action.toLowerCase()} approval: ${error.message}`);
+    }
+  };
+  register("azure-pipelines.approveApproval", argument => decideApproval(argument, "approved"));
+  register("azure-pipelines.rejectApproval", argument => decideApproval(argument, "rejected"));
+
+  register("azure-pipelines.openLogs", async argument => {
     const run = argument?.run || argument?.record?.run;
     const pipeline = argument?.pipeline || argument?.record?.pipeline;
     const log = argument?.log;
     const record = argument?.record;
     const logId = record?.log?.id ?? log?.id;
-    if (logId === undefined) {
+    const api = await getApi(true, pipeline?.workspaceFolder);
+    if (!api || logId === undefined || !run) {
       return;
     }
     try {
-      let content;
-      if (record && run) {
-        content = await api.getBuildLog(run.id, logId);
-      } else if (pipeline && run) {
-        content = await api.getPipelineLog(pipeline.id, run.id, logId);
-      }
-      if (content && typeof content === "object") {
-        content = content.signedContent || content.url || JSON.stringify(content, null, 2);
-      }
-      const document = await vscode.workspace.openTextDocument({
-        language: "log",
-        content: String(content || "No log content was returned.")
+      const fetchContent = async startLine => {
+        let content = record
+          ? await api.getBuildLog(run.id, logId, startLine)
+          : await api.getPipelineLog(pipeline.id, run.id, logId);
+        if (content && typeof content === "object") {
+          content = content.signedContent || content.url || JSON.stringify(content, null, 2);
+        }
+        return String(content || "");
+      };
+      let content = await fetchContent();
+      const panel = vscode.window.createWebviewPanel(
+        "azurePipelinesLog",
+        `Run #${run.id} - ${record?.name || log?.name || "Log"}`,
+        vscode.ViewColumn.Active,
+        {enableScripts: true, retainContextWhenHidden: true}
+      );
+      const nonce = crypto.randomBytes(16).toString("base64");
+      panel.webview.html = renderLogHtml(content, {
+        cspSource: panel.webview.cspSource,
+        nonce
       });
-      await vscode.window.showTextDocument(document, {preview: false});
+
+      const jumpToError = async message => {
+        const file = message.file;
+        const folder = pipeline?.workspaceFolder;
+        if (!file) {
+          return;
+        }
+        const roots = folder ? [folder] : (vscode.workspace.workspaceFolders || []);
+        const normalizedFile = file.replace(/\\/g, "/");
+        const checkoutIndex = normalizedFile.lastIndexOf("/s/");
+        const candidates = [
+          ...(path.isAbsolute(file) ? [path.resolve(file)] : []),
+          ...(checkoutIndex >= 0 ? [normalizedFile.slice(checkoutIndex + 3)] : []),
+          ...(!path.isAbsolute(file) ? [file] : [])
+        ];
+        const targets = [...new Set(candidates.flatMap(candidate =>
+          path.isAbsolute(candidate)
+            ? [path.resolve(candidate)]
+            : roots.map(root => path.resolve(root.uri.fsPath, candidate))
+        ))];
+        for (const target of targets) {
+          const root = roots.find(candidate => {
+            const relative = path.relative(candidate.uri.fsPath, target);
+            return relative === "" || (!relative.startsWith(`..${path.sep}`) &&
+              relative !== ".." && !path.isAbsolute(relative));
+          });
+          if (!root) {
+            continue;
+          }
+          try {
+            const uri = vscode.Uri.file(target);
+            const stat = await vscode.workspace.fs.stat(uri);
+            if (!(stat.type & vscode.FileType.File)) {
+              continue;
+            }
+            const document = await vscode.workspace.openTextDocument(uri);
+            const line = Math.min(
+              Math.max(0, (message.line || 1) - 1),
+              Math.max(0, document.lineCount - 1)
+            );
+            const column = Math.min(
+              Math.max(0, (message.column || 1) - 1),
+              document.lineAt(line).text.length
+            );
+            const position = new vscode.Position(line, column);
+            await vscode.window.showTextDocument(document, {
+              selection: new vscode.Range(position, position)
+            });
+            return;
+          } catch {
+            // Continue through workspace roots until a matching local file is found.
+          }
+        }
+        void vscode.window.showInformationMessage(`Source file from the build log was not found in this workspace: ${file}`);
+      };
+      const messageSubscription = panel.webview.onDidReceiveMessage(message => {
+        if (message.type === "jump") {
+          void jumpToError(message);
+        }
+      });
+      panel.onDidDispose(() => messageSubscription.dispose());
+
+      let polling = false;
+      let timer;
+      const update = async () => {
+        if (polling) {
+          return;
+        }
+        polling = true;
+        try {
+          const lineCount = content.split(/\r?\n/).length - (/\r?\n$/.test(content) ? 1 : 0);
+          const [build, latest] = await Promise.all([
+            api.getBuild(run.id).catch(() => undefined),
+            fetchContent(record ? Math.max(0, lineCount - 1) : undefined)
+          ]);
+          if (record) {
+            const merged = mergeLogContent(content, latest);
+            if (merged !== undefined) {
+              content = merged;
+            } else {
+              const complete = await fetchContent();
+              if (complete.length >= content.length) {
+                content = complete;
+              }
+            }
+          } else if (latest.length > content.length && latest.startsWith(content)) {
+            content = latest;
+          } else if (latest !== content && latest.length >= content.length) {
+            content = latest;
+          }
+          const active = build ? build.status !== "completed" : run.state !== "completed";
+          await panel.webview.postMessage({
+            type: "update",
+            logHtml: renderLogBody(content),
+            errorsHtml: renderErrors(content),
+            active
+          });
+          if (!active && timer) {
+            clearInterval(timer);
+            timer = undefined;
+          }
+        } catch {
+          // A temporary network failure does not close the log viewer.
+        } finally {
+          polling = false;
+        }
+      };
+      if (run.state !== "completed") {
+        timer = setInterval(() => void update(), 5000);
+        panel.onDidDispose(() => clearInterval(timer));
+      }
     } catch (error) {
       void vscode.window.showErrorMessage(`Could not load log: ${error.message}`);
     }
@@ -1566,10 +2267,11 @@ function activate(context) {
   register("azure-pipelines.openLogsInBrowser", async argument => {
     const run = argument?.run;
     const record = argument?.record;
+    const pipeline = argument?.pipeline;
     if (!run) {
       return;
     }
-    const values = await getConnectionValues();
+    const values = await getConnectionValues(pipeline?.workspaceFolder);
     await vscode.env.openExternal(vscode.Uri.parse(
       webLogUrl(values.organization, values.project, run, record)
     ));
@@ -1602,7 +2304,7 @@ function activate(context) {
   });
 
   const mutateVariableGroup = async (groupNode, mutate) => {
-    const api = await getApi(true);
+    const api = await getApi(true, groupNode?.workspaceFolder);
     if (!api || !groupNode?.group) {
       return;
     }
@@ -1650,8 +2352,8 @@ function activate(context) {
     }
   };
 
-  register("azure-pipelines.addVariableGroup", async () => {
-    const api = await getApi(true);
+  register("azure-pipelines.addVariableGroup", async argument => {
+    const api = await getApi(true, argument?.workspaceFolder);
     if (!api) {
       return;
     }
@@ -1679,7 +2381,7 @@ function activate(context) {
     if (!groupNode) {
       return;
     }
-    const api = await getApi(true);
+    const api = await getApi(true, groupNode.workspaceFolder);
     if (!api) {
       return;
     }
@@ -1758,7 +2460,7 @@ function activate(context) {
       return;
     }
     try {
-      const api = await getApi(true);
+      const api = await getApi(true, groupNode.workspaceFolder);
       if (api) {
         await api.deleteVariableGroup(groupNode.group.id);
         libraryProvider.refresh();
@@ -1766,6 +2468,128 @@ function activate(context) {
     } catch (error) {
       void vscode.window.showErrorMessage(`Could not delete variable group: ${error.message}`);
     }
+  });
+
+  const mutatePipelineDefinition = async (variableNode, mutate) => {
+    const definitionNode = variableNode?.definition ? variableNode : undefined;
+    if (!definitionNode) {
+      return;
+    }
+    const api = await getApi(true, variableNode.workspaceFolder);
+    if (!api) {
+      return;
+    }
+    try {
+      const definition = await api.getBuildDefinition(definitionNode.definition.id);
+      const variables = {...(definition.variables || {})};
+      if (!mutate(variables, definition)) {
+        return;
+      }
+      const hasMaskedSecrets = Object.values(definition.variables || {}).some(variable =>
+        variable.isSecret && (variable.value == null || variable.value === "********")
+      );
+      if (hasMaskedSecrets) {
+        const answer = await vscode.window.showWarningMessage(
+          "Azure DevOps masks existing pipeline secret values. Continue updating this definition? Unchanged secrets will be preserved without resending their hidden values.",
+          {modal: true},
+          "Continue"
+        );
+        if (answer !== "Continue") {
+          return;
+        }
+      }
+      definition.variables = Object.fromEntries(Object.entries(variables).map(([name, variable]) => {
+        if (variable.isSecret && (variable.value == null || variable.value === "********")) {
+          const {value, ...maskedSecret} = variable;
+          return [name, maskedSecret];
+        }
+        return [name, variable];
+      }));
+      await api.updateBuildDefinition(definition);
+      libraryProvider.refresh();
+      void vscode.window.showInformationMessage(`Updated variables for pipeline "${definition.name}".`);
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not update pipeline variables: ${error.message}`);
+    }
+  };
+
+  register("azure-pipelines.addPipelineVariable", async argument => {
+    if (!argument?.definition) {
+      return;
+    }
+    const name = await vscode.window.showInputBox({prompt: "Pipeline variable name", ignoreFocusOut: true});
+    if (!name?.trim()) {
+      return;
+    }
+    const kind = await vscode.window.showQuickPick(["Plain text", "Secret"], {
+      placeHolder: "Pipeline variable type"
+    });
+    if (!kind) {
+      return;
+    }
+    const value = await vscode.window.showInputBox({
+      prompt: `Value for ${name}`,
+      password: kind === "Secret",
+      ignoreFocusOut: true
+    });
+    if (value === undefined) {
+      return;
+    }
+    await mutatePipelineDefinition(argument, variables => {
+      const duplicate = Object.keys(variables).some(key => key.toLowerCase() === name.trim().toLowerCase());
+      if (duplicate) {
+        void vscode.window.showWarningMessage(`Pipeline variable "${name}" already exists.`);
+        return false;
+      }
+      variables[name.trim()] = {
+        value,
+        isSecret: kind === "Secret",
+        allowOverride: false
+      };
+      return true;
+    });
+  });
+
+  register("azure-pipelines.updatePipelineVariable", async argument => {
+    if (!argument?.definition || !argument.variableName) {
+      return;
+    }
+    const current = argument.variable || {};
+    const value = await vscode.window.showInputBox({
+      prompt: `New value for ${argument.variableName}${current.isSecret ? " (secret; current value is hidden)" : ""}`,
+      value: current.isSecret ? "" : (current.value || ""),
+      password: Boolean(current.isSecret),
+      ignoreFocusOut: true
+    });
+    if (value === undefined || (current.isSecret && !value)) {
+      return;
+    }
+    await mutatePipelineDefinition(argument, variables => {
+      const existing = variables[argument.variableName] || {};
+      variables[argument.variableName] = {...existing, value};
+      return true;
+    });
+  });
+
+  register("azure-pipelines.deletePipelineVariable", async argument => {
+    if (!argument?.definition || !argument.variableName) {
+      return;
+    }
+    const answer = await vscode.window.showWarningMessage(
+      `Delete pipeline variable "${argument.variableName}" from "${argument.definition.name}"?`,
+      {modal: true},
+      "Delete"
+    );
+    if (answer !== "Delete") {
+      return;
+    }
+    await mutatePipelineDefinition(argument, variables => {
+      if (!Object.hasOwn(variables, argument.variableName)) {
+        return false;
+      }
+      delete variables[argument.variableName];
+      return true;
+    });
   });
 
   register("azure-pipelines.addVariable", async argument => {
@@ -1863,12 +2687,26 @@ function activate(context) {
     void vscode.window.showInformationMessage("Copied variable value.");
   });
 
-  const interval = vscode.workspace.getConfiguration("azure-pipelines").get("refreshInterval", 60);
   let refreshTimer;
-  if (interval > 0) {
-    refreshTimer = setInterval(refreshAll, Math.max(30, interval) * 1000);
-    context.subscriptions.push({dispose: () => clearInterval(refreshTimer)});
-  }
+  const configureRefreshTimer = () => {
+    if (refreshTimer) {
+      clearInterval(refreshTimer);
+      refreshTimer = undefined;
+    }
+    const interval = vscode.workspace.getConfiguration("azure-pipelines").get("refreshInterval", 60);
+    if (interval > 0) {
+      refreshTimer = setInterval(refreshAll, Math.max(30, interval) * 1000);
+    }
+  };
+  configureRefreshTimer();
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration(event => {
+      if (event.affectsConfiguration("azure-pipelines.refreshInterval")) {
+        configureRefreshTimer();
+      }
+    }),
+    {dispose: () => clearInterval(refreshTimer)}
+  );
 
   context.subscriptions.push({dispose: () => {
     pipelinesProvider.onDidChangeTreeDataEmitter.dispose();
@@ -1881,6 +2719,87 @@ function activate(context) {
 function deactivate() {}
 
 module.exports = {activate, deactivate};
+
+=== C:\Users\johnm\Documents\Technology\azdo-extension\src\git.js ===
+"use strict";
+
+function parseAzureDevOpsRemote(remote) {
+  if (typeof remote !== "string" || !remote.trim()) {
+    return undefined;
+  }
+
+  const value = remote.trim();
+  let host;
+  let path;
+  try {
+    const normalized = /^[^/]+@[^:]+:/.test(value)
+      ? `ssh://${value.replace(":", "/")}`
+      : value;
+    const url = new URL(normalized);
+    host = url.hostname.toLowerCase();
+    path = decodeURIComponent(url.pathname).split("/").filter(Boolean);
+  } catch {
+    return undefined;
+  }
+
+  let organization;
+  let project;
+  let repository;
+  if (host === "dev.azure.com") {
+    [organization, project] = path;
+    if (path[2]?.toLowerCase() === "_git") {
+      repository = path[3];
+    }
+  } else if (
+    host === "ssh.dev.azure.com" ||
+    host === "vs-ssh.visualstudio.com" ||
+    host.endsWith(".vs-ssh.visualstudio.com")
+  ) {
+    const v3Index = path.findIndex(segment => segment.toLowerCase() === "v3");
+    if (v3Index >= 0) {
+      [organization, project, repository] = path.slice(v3Index + 1);
+    }
+  } else if (host.endsWith(".visualstudio.com")) {
+    organization = host.slice(0, -".visualstudio.com".length);
+    const collectionIndex = path[0]?.toLowerCase() === "defaultcollection" ? 1 : 0;
+    project = path[collectionIndex];
+    if (path[collectionIndex + 1]?.toLowerCase() === "_git") {
+      repository = path[collectionIndex + 2];
+    }
+  }
+
+  if (!organization || !project) {
+    return undefined;
+  }
+  return {organization, project, repository};
+}
+
+function parseGitRemotes(output) {
+  const rows = [];
+  for (const line of String(output || "").split(/\r?\n/)) {
+    const configEntry = line.match(/^remote\.(.+)\.url\s+(.+)$/i);
+    const listingEntry = line.match(/^(\S+)\s+(.+?)\s+\((?:fetch|push)\)$/i);
+    const name = configEntry?.[1] || listingEntry?.[1];
+    const url = configEntry?.[2] || listingEntry?.[2] || line;
+    const remote = parseAzureDevOpsRemote(url);
+    if (remote) {
+      rows.push({name, remote});
+    }
+  }
+
+  const originRows = rows.filter(row => row.name === "origin");
+  const candidates = originRows.length ? originRows : rows;
+  const unique = new Map();
+  for (const {remote: candidate} of candidates) {
+    const key = `${candidate.organization.toLowerCase()}/${candidate.project.toLowerCase()}`;
+    if (!unique.has(key)) {
+      unique.set(key, candidate);
+    }
+  }
+  return [...unique.values()];
+}
+
+module.exports = {parseAzureDevOpsRemote, parseGitRemotes};
 
 === C:\Users\johnm\Documents\Technology\azdo-extension\src\helpers.js ===
 "use strict";
@@ -1931,6 +2850,279 @@ function webLogUrl(organization, project, run, record) {
 
 module.exports = {normalizeVariables, parseJsonObject, webLogUrl, webRunUrl};
 
+=== C:\Users\johnm\Documents\Technology\azdo-extension\src\logViewer.js ===
+"use strict";
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, character => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#39;"
+  })[character]);
+}
+
+function ansiToHtml(value) {
+  const colors = new Map([
+    [30, "black"], [31, "red"], [32, "green"], [33, "yellow"],
+    [34, "blue"], [35, "magenta"], [36, "cyan"], [37, "white"],
+    [90, "bright-black"], [91, "bright-red"], [92, "bright-green"],
+    [93, "bright-yellow"], [94, "bright-blue"], [95, "bright-magenta"],
+    [96, "bright-cyan"], [97, "bright-white"]
+  ]);
+  let classes = [];
+  let html = "";
+  const parts = String(value).split(/\u001b\[([0-9;]*)m/);
+  for (let index = 0; index < parts.length; index++) {
+    if (index % 2 === 0) {
+      const text = escapeHtml(parts[index]);
+      html += classes.length ? `<span class="${classes.join(" ")}">${text}</span>` : text;
+      continue;
+    }
+    const codes = parts[index] ? parts[index].split(";").map(Number) : [0];
+    for (const code of codes) {
+      if (code === 0) {
+        classes = [];
+      } else if (code === 1) {
+        classes = classes.filter(name => name !== "bold");
+        classes.push("bold");
+      } else if (colors.has(code)) {
+        classes = classes.filter(name => !name.startsWith("fg-"));
+        classes.push(`fg-${colors.get(code)}`);
+      } else if (colors.has(code - 10)) {
+        classes = classes.filter(name => !name.startsWith("bg-"));
+        classes.push(`bg-${colors.get(code - 10)}`);
+      }
+    }
+  }
+  return html;
+}
+
+function parseLogErrors(content) {
+  const errors = [];
+  const lines = String(content).split(/\r?\n/);
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    const issue = line.match(/##vso\[task\.logissue\s+([^\]]*)\](.*)/i);
+    if (issue && /(?:^|;)type=error(?:;|$)/i.test(issue[1])) {
+      const properties = Object.fromEntries(issue[1].split(";").map(entry => {
+        const separator = entry.indexOf("=");
+        return separator < 0
+          ? [entry.trim().toLowerCase(), ""]
+          : [entry.slice(0, separator).trim().toLowerCase(), entry.slice(separator + 1).trim()];
+      }));
+      errors.push({
+        message: issue[2] || "Pipeline error",
+        file: properties.sourcepath,
+        line: Number(properties.linenumber) || undefined,
+        column: Number(properties.columnnumber) || undefined,
+        logLine: index + 1
+      });
+      continue;
+    }
+    const errorText = line.replace(/^##\[error\]\s*/i, "");
+    const compiler = errorText.match(/^(.+?)\((\d+)(?:,(\d+))?\):\s*error\b(.*)$/i);
+    if (compiler) {
+      errors.push({
+        message: `error${compiler[4]}`,
+        file: compiler[1],
+        line: Number(compiler[2]),
+        column: Number(compiler[3]) || undefined,
+        logLine: index + 1
+      });
+      continue;
+    }
+    if (/##\[error\]/i.test(line)) {
+      errors.push({
+        message: line.replace(/^.*?##\[error\]\s*/i, "") || "Pipeline error",
+        logLine: index + 1
+      });
+    }
+  }
+  return errors;
+}
+
+function mergeLogContent(current, tail) {
+  const existing = String(current || "");
+  const update = String(tail || "");
+  if (!update) {
+    return existing;
+  }
+  if (!existing || update.startsWith(existing)) {
+    return update;
+  }
+  if (existing.startsWith(update)) {
+    return existing;
+  }
+
+  const currentLines = existing.split(/\r?\n/);
+  const tailLines = update.split(/\r?\n/);
+  if (currentLines[currentLines.length - 1] === "") {
+    currentLines.pop();
+  }
+  if (tailLines[tailLines.length - 1] === "") {
+    tailLines.pop();
+  }
+  const maxOverlap = Math.min(currentLines.length, tailLines.length);
+  let overlap = 0;
+  for (let size = maxOverlap; size > 0; size--) {
+    if (currentLines.slice(-size).every((line, index) => line === tailLines[index])) {
+      overlap = size;
+      break;
+    }
+  }
+  if (!overlap) {
+    return undefined;
+  }
+
+  const appended = tailLines.slice(overlap).join("\n");
+  if (!appended) {
+    return existing;
+  }
+  let merged = `${existing}${existing.endsWith("\n") ? "" : "\n"}${appended}`;
+  if (update.endsWith("\n") && !merged.endsWith("\n")) {
+    merged += "\n";
+  }
+  return merged;
+}
+
+function renderLogBody(content) {
+  const groups = [];
+  const output = [];
+  const lines = String(content).split(/\r?\n/);
+  lines.forEach((line, index) => {
+    const groupStart = line.match(/##\[group\](.*)/i);
+    if (groupStart) {
+      groups.push("</details>");
+      output.push(`<details class="log-group" open><summary>${ansiToHtml(groupStart[1])}</summary>`);
+      return;
+    }
+    if (/##\[endgroup\]/i.test(line)) {
+      if (groups.length) {
+        output.push(groups.pop());
+      }
+      return;
+    }
+    if (!line) {
+      output.push(`<div class="log-line" id="log-line-${index + 1}">&nbsp;</div>`);
+      return;
+    }
+    const error = /##\[error\]|type=error/i.test(line);
+    const section = line.match(/##\[section\](.*)/i);
+    const text = section ? section[1] : line;
+    output.push(
+      `<div class="log-line${error ? " error" : ""}" id="log-line-${index + 1}">` +
+      `<span class="line-number">${index + 1}</span>${ansiToHtml(text)}</div>`
+    );
+  });
+  while (groups.length) {
+    output.push(groups.pop());
+  }
+  return output.join("\n");
+}
+
+function renderErrors(content) {
+  return parseLogErrors(content).map(error => {
+    const location = error.file
+      ? `${error.file}${error.line ? `:${error.line}${error.column ? `:${error.column}` : ""}` : ""}`
+      : `Log line ${error.logLine}`;
+    return `<li><button class="error-link" data-file="${escapeHtml(error.file || "")}" ` +
+      `data-line="${error.line || ""}" data-column="${error.column || ""}" ` +
+      `data-log-line="${error.logLine}"><span>${escapeHtml(error.message)}</span>` +
+      `<small>${escapeHtml(location)}</small></button></li>`;
+  }).join("");
+}
+
+function renderLogHtml(content, {cspSource, nonce}) {
+  const title = "Azure Pipelines Log";
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; font: 13px var(--vscode-editor-font-family, monospace); color: var(--vscode-editor-foreground); background: var(--vscode-editor-background); }
+    header { position: sticky; top: 0; z-index: 2; padding: 12px 16px; border-bottom: 1px solid var(--vscode-panel-border); background: var(--vscode-sideBar-background); }
+    h1 { display: inline; margin: 0 18px 0 0; font: 600 14px var(--vscode-font-family); }
+    #state { color: var(--vscode-descriptionForeground); }
+    #errors { margin: 0; padding: 0 16px; }
+    #errors:empty { display: none; }
+    #errors li { list-style: none; border-bottom: 1px solid var(--vscode-panel-border); }
+    .error-link { display: flex; width: 100%; gap: 16px; justify-content: space-between; padding: 8px 0; border: 0; text-align: left; color: var(--vscode-errorForeground); background: transparent; cursor: pointer; }
+    .error-link small { color: var(--vscode-descriptionForeground); }
+    #log-content { padding: 12px 0 30px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .log-line { min-height: 1.5em; padding: 0 16px 0 0; }
+    .line-number { display: inline-block; width: 5.2em; padding-right: 1em; color: var(--vscode-editorLineNumber-foreground); text-align: right; user-select: none; }
+    .log-line.error { color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 9%, transparent); }
+    .log-group { margin: 4px 16px; border-left: 1px solid var(--vscode-panel-border); }
+    .log-group summary { padding: 4px 8px; color: var(--vscode-textLink-foreground); cursor: pointer; }
+    .bold { font-weight: 700; }
+    .fg-black { color: #000; } .fg-red { color: #cd3131; } .fg-green { color: #0dbc79; } .fg-yellow { color: #e5e510; }
+    .fg-blue { color: #2472c8; } .fg-magenta { color: #bc3fbc; } .fg-cyan { color: #11a8cd; } .fg-white { color: #e5e5e5; }
+    .fg-bright-black { color: #666; } .fg-bright-red { color: #f14c4c; } .fg-bright-green { color: #23d18b; } .fg-bright-yellow { color: #f5f543; }
+    .fg-bright-blue { color: #3b8eea; } .fg-bright-magenta { color: #d670d6; } .fg-bright-cyan { color: #29b8db; } .fg-bright-white { color: #fff; }
+    .bg-black { background: #000; } .bg-red { background: #cd3131; } .bg-green { background: #0dbc79; } .bg-yellow { background: #e5e510; }
+    .bg-blue { background: #2472c8; } .bg-magenta { background: #bc3fbc; } .bg-cyan { background: #11a8cd; } .bg-white { background: #e5e5e5; }
+  </style>
+</head>
+<body>
+  <header><h1>${title}</h1><span id="state">Loading</span></header>
+  <ul id="errors">${renderErrors(content)}</ul>
+  <main id="log-content">${renderLogBody(content)}</main>
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi();
+    const errors = document.getElementById("errors");
+    const log = document.getElementById("log-content");
+    const state = document.getElementById("state");
+    document.addEventListener("click", event => {
+      const button = event.target.closest(".error-link");
+      if (!button) return;
+      if (!button.dataset.file) {
+        document.getElementById("log-line-" + button.dataset.logLine)?.scrollIntoView({block: "center"});
+      }
+      vscode.postMessage({
+        type: "jump",
+        file: button.dataset.file,
+        line: Number(button.dataset.line) || undefined,
+        column: Number(button.dataset.column) || undefined,
+        logLine: Number(button.dataset.logLine)
+      });
+    });
+    window.addEventListener("message", event => {
+      if (event.data.type !== "update") return;
+      const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+      const collapsed = Array.from(log.querySelectorAll("details")).map(item => item.open);
+      log.innerHTML = event.data.logHtml;
+      Array.from(log.querySelectorAll("details")).forEach((item, index) => {
+        item.open = collapsed[index] === undefined ? true : collapsed[index];
+      });
+      errors.innerHTML = event.data.errorsHtml;
+      state.textContent = event.data.active ? "Live - updates every few seconds" : "Completed";
+      if (nearBottom) log.scrollTop = log.scrollHeight;
+    });
+    state.textContent = ${JSON.stringify(stateText(content))};
+  </script>
+</body>
+</html>`;
+}
+
+function stateText(content) {
+  return String(content || "").length ? "Loaded" : "Waiting for output";
+}
+
+module.exports = {
+  ansiToHtml,
+  mergeLogContent,
+  parseLogErrors,
+  renderLogBody,
+  renderErrors,
+  renderLogHtml
+};
+
 === C:\Users\johnm\Documents\Technology\azdo-extension\src\providers.js ===
 "use strict";
 
@@ -1943,10 +3135,29 @@ function responseItems(response, key) {
   return response?.[key] || response?.value || [];
 }
 
+function orderedRecords(records) {
+  return records
+    .map((record, index) => ({record, index, order: Number(record.order)}))
+    .sort((left, right) => {
+      const leftOrder = Number.isFinite(left.order) ? left.order : Number.MAX_SAFE_INTEGER;
+      const rightOrder = Number.isFinite(right.order) ? right.order : Number.MAX_SAFE_INTEGER;
+      return leftOrder - rightOrder || left.index - right.index;
+    })
+    .map(item => item.record);
+}
+
 function statusIcon(run) {
   const state = String(run.state || "").toLowerCase();
   const result = String(run.result || "").toLowerCase();
-  if (["inprogress", "cancelling", "notstarted"].includes(state)) {
+  if ([
+    "inprogress",
+    "cancelling",
+    "canceling",
+    "notstarted",
+    "queued",
+    "pending",
+    "postponed"
+  ].includes(state)) {
     return new vscode.ThemeIcon("sync~spin", new vscode.ThemeColor("charts.blue"));
   }
   if (result === "succeeded") {
@@ -1967,28 +3178,35 @@ function runLabel(run) {
   return `#${run.id} ${name} - ${status}`;
 }
 
-function pipelineNode(pipeline, pinnedIds = new Set()) {
+function pipelineNode(pipeline, pinnedIds = new Set(), workspaceFolder) {
   const pinned = pinnedIds.has(Number(pipeline.id));
+  const workspaceKey = workspaceFolder?.uri.toString() || "";
   const item = new vscode.TreeItem(
     pipeline.name || `Pipeline ${pipeline.id}`,
     vscode.TreeItemCollapsibleState.Collapsed
   );
-  item.id = `pipeline-${pipeline.id}`;
+  item.id = `pipeline-${workspaceKey}-${pipeline.id}`;
   item.contextValue = pinned ? "azurePipelinePinned" : "azurePipeline";
   item.pipeline = pipeline;
+  item.workspaceFolder = workspaceFolder;
+  if (workspaceFolder) {
+    item.pipeline = {...pipeline, workspaceFolder};
+  }
   item.description = pipeline.folder && pipeline.folder !== "\\" ? pipeline.folder : undefined;
   item.iconPath = new vscode.ThemeIcon(pinned ? "pin" : "repo");
   item.tooltip = `Pipeline ${pipeline.id}${pipeline.folder ? `\n${pipeline.folder}` : ""}`;
   return item;
 }
 
-function runNode(run, pipeline) {
+function runNode(run, pipeline, workspaceFolder = pipeline.workspaceFolder) {
   const active = run.state !== "completed";
+  const workspaceKey = workspaceFolder?.uri.toString() || "";
   const item = new vscode.TreeItem(runLabel(run), vscode.TreeItemCollapsibleState.Collapsed);
-  item.id = `run-${pipeline.id}-${run.id}`;
+  item.id = `run-${workspaceKey}-${pipeline.id}-${run.id}`;
   item.contextValue = active ? "azurePipelineRunActive" : "azurePipelineRunCompleted";
   item.run = run;
   item.pipeline = pipeline;
+  item.workspaceFolder = workspaceFolder;
   item.iconPath = statusIcon(run);
   item.description = run.createdDate ? new Date(run.createdDate).toLocaleString() : undefined;
   item.tooltip = `${pipeline.name} / run ${run.id}\n${run.resources?.repositories?.self?.refName || "Branch unavailable"}`;
@@ -2000,23 +3218,33 @@ function runNode(run, pipeline) {
   return item;
 }
 
-function informationNode(label, detail, command) {
+function informationNode(label, detail, command, argumentsList) {
   const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
   item.description = detail;
   item.iconPath = new vscode.ThemeIcon(command ? "gear" : "info");
   if (command) {
-    item.command = {command, title: label};
+    item.command = {command, title: label, arguments: argumentsList};
   }
   return item;
 }
 
-function recordNode(record, hasChildren, run, pipeline, timelineId) {
+function recordNode(record, hasChildren, run, pipeline, timelineId, workspaceFolder, parentStageRefName) {
   const item = new vscode.TreeItem(
     record.name || record.type || "Pipeline step",
     hasChildren ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None
   );
-  item.id = `timeline-${timelineId || "main"}-${record.id}`;
-  item.contextValue = record.log ? "azurePipelineLog" : "azurePipelineTimelineRecord";
+  item.id = `timeline-${workspaceFolder?.uri.toString() || ""}-${pipeline.id}-${timelineId || "main"}-${record.id}`;
+  const recordType = String(record.type || "").toLowerCase();
+  const stageRefName = recordType === "stage"
+    ? (record.identifier || record.name)
+    : parentStageRefName;
+  item.contextValue = record.log
+    ? "azurePipelineLog"
+    : recordType === "stage"
+      ? "azurePipelineStageRetry"
+      : recordType === "job" && stageRefName
+        ? "azurePipelineJobRetry"
+        : "azurePipelineTimelineRecord";
   item.description = [
     record.result || record.state || record.currentOperation,
     record.attempt > 1 ? `Attempt ${record.attempt}` : ""
@@ -2036,15 +3264,40 @@ function recordNode(record, hasChildren, run, pipeline, timelineId) {
   item.run = run;
   item.pipeline = pipeline;
   item.timelineId = timelineId;
+  item.workspaceFolder = workspaceFolder;
+  item.stageRefName = stageRefName;
+  return item;
+}
+
+function workspaceNode(folder) {
+  const item = new vscode.TreeItem(folder.name, vscode.TreeItemCollapsibleState.Collapsed);
+  item.id = `workspace-${folder.uri.toString()}`;
+  item.contextValue = "azurePipelineWorkspace";
+  item.workspaceFolder = folder;
+  item.description = folder.uri.fsPath;
+  item.iconPath = new vscode.ThemeIcon("root-folder");
+  return item;
+}
+
+function artifactsNode(run, pipeline, workspaceFolder) {
+  const item = new vscode.TreeItem("Artifacts", vscode.TreeItemCollapsibleState.Collapsed);
+  item.id = `artifacts-${workspaceFolder?.uri.toString() || ""}-${pipeline.id}-${run.id}`;
+  item.contextValue = "azurePipelineArtifacts";
+  item.iconPath = new vscode.ThemeIcon("archive");
+  item.run = run;
+  item.pipeline = pipeline;
+  item.workspaceFolder = workspaceFolder;
+  item.artifactsRoot = true;
   return item;
 }
 
 class PipelineProvider {
-  constructor({getApi, getPinnedIds, currentBranch = false, getBranch}) {
+  constructor({getApi, getPinnedIds, currentBranch = false, getBranch, getWorkspaceFolders}) {
     this.getApi = getApi;
     this.getPinnedIds = getPinnedIds;
     this.currentBranch = currentBranch;
     this.getBranch = getBranch;
+    this.getWorkspaceFolders = getWorkspaceFolders;
     this.onDidChangeTreeDataEmitter = new vscode.EventEmitter();
     this.onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
     this.timelines = new Map();
@@ -2062,12 +3315,39 @@ class PipelineProvider {
   }
 
   async getChildren(element) {
-    const api = await this.getApi(false);
-    if (!api) {
-      return [informationNode("Configure Azure DevOps", "Organization, project, and authentication required", "azure-pipelines.configure")];
-    }
-
     try {
+      if (!element) {
+        const folders = this.getWorkspaceFolders?.() || [];
+        if (folders.length > 1) {
+          return folders.map(workspaceNode);
+        }
+      }
+
+      const workspaceFolder = element?.workspaceFolder || element?.pipeline?.workspaceFolder;
+      const api = await this.getApi(false, workspaceFolder);
+      if (!api) {
+        return [informationNode(
+          "Configure Azure DevOps",
+          workspaceFolder
+            ? `No connection detected for ${workspaceFolder.name}`
+            : "Organization, project, and authentication required",
+          "azure-pipelines.configure",
+          workspaceFolder ? [{workspaceFolder}] : undefined
+        )];
+      }
+
+      if (element?.contextValue === "azurePipelineWorkspace") {
+        if (this.currentBranch) {
+          return this.getPipelinesForBranch(api, element.workspaceFolder);
+        }
+        const pipelines = responseItems(await api.listPipelines(), "pipelines");
+        return pipelines.map(pipeline => pipelineNode(
+          pipeline,
+          this.getPinnedIds(),
+          element.workspaceFolder
+        ));
+      }
+
       if (!element) {
         if (this.currentBranch) {
           return this.getPipelinesForBranch(api);
@@ -2088,35 +3368,60 @@ class PipelineProvider {
               (timeline.records || []).some(child => child.parentId === record.id),
               element.run,
               element.pipeline,
-              element.previousAttempt.timelineId
+              element.previousAttempt.timelineId,
+              workspaceFolder
             )]
           : [];
       }
 
       if (element.record && element.run && element.pipeline) {
         const timeline = await this.getTimeline(api, element.run, element.timelineId);
-        const children = (timeline?.records || [])
-          .filter(record => record.parentId === element.record.id)
+        const children = orderedRecords((timeline?.records || [])
+          .filter(record => record.parentId === element.record.id))
           .map(record => recordNode(
             record,
             (timeline.records || []).some(child => child.parentId === record.id),
             element.run,
             element.pipeline,
-            element.timelineId
+            element.timelineId,
+            workspaceFolder,
+            element.stageRefName
           ));
         const previous = (element.record.previousAttempts || []).map(attempt => {
           const item = new vscode.TreeItem(
             `Previous attempt ${attempt.attempt}`,
             vscode.TreeItemCollapsibleState.Collapsed
           );
-          item.id = `attempt-${element.record.id}-${attempt.attempt}`;
+          item.id = `attempt-${workspaceFolder?.uri.toString() || ""}-${element.pipeline.id}-${element.record.id}-${attempt.attempt}`;
           item.contextValue = "azurePipelinePreviousAttempt";
           item.previousAttempt = attempt;
           item.run = element.run;
           item.pipeline = element.pipeline;
+          item.workspaceFolder = workspaceFolder;
           return item;
         });
         return [...children, ...previous];
+      }
+
+      if (element.artifactsRoot && element.run) {
+        const response = await api.listBuildArtifacts(element.run.id);
+        return responseItems(response, "artifacts").map(artifact => {
+          const item = new vscode.TreeItem(artifact.name, vscode.TreeItemCollapsibleState.None);
+          item.id = `artifact-${workspaceFolder?.uri.toString() || ""}-${element.pipeline.id}-${element.run.id}-${artifact.id || artifact.name}`;
+          item.contextValue = "azurePipelineArtifact";
+          item.iconPath = new vscode.ThemeIcon("archive");
+          item.description = artifact.resource?.type;
+          item.run = element.run;
+          item.pipeline = element.pipeline;
+          item.artifact = artifact;
+          item.workspaceFolder = workspaceFolder;
+          item.command = {
+            command: "azure-pipelines.downloadArtifact",
+            title: "Download Artifact",
+            arguments: [item]
+          };
+          return item;
+        });
       }
 
       if (element.run && element.pipeline) {
@@ -2125,9 +3430,9 @@ class PipelineProvider {
 
       if (element.pipeline) {
         const runs = this.currentBranch
-          ? (this.branchRuns.get(Number(element.pipeline.id)) || [])
+          ? (this.branchRuns.get(this.pipelineKey(element.pipeline, workspaceFolder)) || [])
           : responseItems(await api.listRuns(element.pipeline.id), "runs").slice(0, 100);
-        return runs.map(run => runNode(run, element.pipeline));
+        return runs.map(run => runNode(run, element.pipeline, workspaceFolder));
       }
 
       if (element.log) {
@@ -2139,8 +3444,8 @@ class PipelineProvider {
     return [];
   }
 
-  async getPipelinesForBranch(api) {
-    const branch = await this.getBranch();
+  async getPipelinesForBranch(api, workspaceFolder) {
+    const branch = await this.getBranch(workspaceFolder);
     if (!branch) {
       return [informationNode("No Git branch detected", "Open a Git repository to filter runs by branch")];
     }
@@ -2175,32 +3480,60 @@ class PipelineProvider {
       }
       grouped.get(key).runs.push(run);
     }
-    this.branchRuns = new Map([...grouped].map(([id, item]) => [id, item.runs]));
-    return [...grouped.values()].map(item => pipelineNode(item.pipeline, this.getPinnedIds()));
+    const workspaceKey = workspaceFolder?.uri.toString() || "";
+    for (const key of this.branchRuns.keys()) {
+      if (key.startsWith(`${workspaceKey}:`)) {
+        this.branchRuns.delete(key);
+      }
+    }
+    for (const [id, item] of grouped) {
+      this.branchRuns.set(
+        this.pipelineKey({id}, workspaceFolder),
+        item.runs
+      );
+    }
+    return [...grouped.values()].map(item => pipelineNode(
+      item.pipeline,
+      this.getPinnedIds(),
+      workspaceFolder
+    ));
   }
 
   async getTimeline(api, run, timelineId) {
-    const key = `${run.id}:${timelineId || ""}`;
+    const key = `${api.organization}/${api.project}:${run.id}:${timelineId || ""}`;
     if (!this.timelines.has(key)) {
       this.timelines.set(key, api.getBuildTimeline(run.id, timelineId).catch(() => undefined));
     }
     return this.timelines.get(key);
   }
 
+  pipelineKey(pipeline, workspaceFolder) {
+    return `${workspaceFolder?.uri.toString() || ""}:${pipeline.id}`;
+  }
+
   async getRunDetails(api, run, pipeline) {
     const timeline = await this.getTimeline(api, run);
+    const artifacts = artifactsNode(run, pipeline, pipeline.workspaceFolder);
     const records = timeline?.records || [];
     if (records.length) {
-      const rootRecords = records.filter(record => !record.parentId);
-      return rootRecords.map(record => {
-        return recordNode(record, records.some(child => child.parentId === record.id), run, pipeline);
-      });
+      const rootRecords = orderedRecords(records.filter(record => !record.parentId));
+      return [
+        ...rootRecords.map(record => recordNode(
+          record,
+          records.some(child => child.parentId === record.id),
+          run,
+          pipeline,
+          undefined,
+          pipeline.workspaceFolder
+        )),
+        artifacts
+      ];
     }
 
     try {
       const logResponse = await api.listPipelineLogs(pipeline.id, run.id);
       const logs = responseItems(logResponse, "logs");
-      return logs.map(log => {
+      return [...logs.map(log => {
         const item = new vscode.TreeItem(
           log.name || `Log ${log.id}`,
           vscode.TreeItemCollapsibleState.None
@@ -2214,17 +3547,25 @@ class PipelineProvider {
           title: "Open Logs",
           arguments: [{log, run, pipeline}]
         };
+        item.log = log;
+        item.run = run;
+        item.pipeline = pipeline;
+        item.workspaceFolder = pipeline.workspaceFolder;
         return item;
-      });
+      }), artifacts];
     } catch {
-      return [informationNode("Run details unavailable", "Timeline and logs are not available for this run")];
+      return [
+        informationNode("Run details unavailable", "Timeline and logs are not available for this run"),
+        artifacts
+      ];
     }
   }
 }
 
 class LibraryProvider {
-  constructor({getApi}) {
+  constructor({getApi, getWorkspaceFolders}) {
     this.getApi = getApi;
+    this.getWorkspaceFolders = getWorkspaceFolders;
     this.onDidChangeTreeDataEmitter = new vscode.EventEmitter();
     this.onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
   }
@@ -2238,16 +3579,38 @@ class LibraryProvider {
   }
 
   async getChildren(element) {
-    const api = await this.getApi(false);
+    if (!element) {
+      const folders = this.getWorkspaceFolders?.() || [];
+      if (folders.length > 1) {
+        const connections = await Promise.all(folders.map(folder => this.getApi(false, folder)));
+        const projects = new Set(connections.filter(Boolean).map(api =>
+          `${api.organization.toLowerCase()}/${api.project.toLowerCase()}`
+        ));
+        if (projects.size > 1) {
+          return folders.map(workspaceNode);
+        }
+      }
+    }
+    const workspaceFolder = element?.workspaceFolder;
+    const api = await this.getApi(false, workspaceFolder);
     if (!api) {
-      return [informationNode("Configure Azure DevOps", "Organization, project, and authentication required", "azure-pipelines.configure")];
+      return [informationNode(
+        "Configure Azure DevOps",
+        workspaceFolder
+          ? `No connection detected for ${workspaceFolder.name}`
+          : "Organization, project, and authentication required",
+        "azure-pipelines.configure",
+        workspaceFolder ? [{workspaceFolder}] : undefined
+      )];
     }
 
     try {
-      if (!element) {
-        const [environmentsResult, groupsResult] = await Promise.allSettled([
+      if (!element || element.contextValue === "azurePipelineWorkspace") {
+        const [environmentsResult, groupsResult, definitionsResult, approvalsResult] = await Promise.allSettled([
           api.listEnvironments(),
-          api.listVariableGroups()
+          api.listVariableGroups(),
+          api.listBuildDefinitions(),
+          api.listPendingApprovals()
         ]);
         return [
           this.groupNode(
@@ -2256,7 +3619,8 @@ class LibraryProvider {
             environmentsResult.status === "fulfilled"
               ? responseItems(environmentsResult.value, "environments")
               : [],
-            environmentsResult.status === "rejected" ? environmentsResult.reason.message : undefined
+            environmentsResult.status === "rejected" ? environmentsResult.reason.message : undefined,
+            workspaceFolder
           ),
           this.groupNode(
             "Variable Groups",
@@ -2264,9 +3628,72 @@ class LibraryProvider {
             groupsResult.status === "fulfilled"
               ? responseItems(groupsResult.value, "variableGroups")
               : [],
-            groupsResult.status === "rejected" ? groupsResult.reason.message : undefined
+            groupsResult.status === "rejected" ? groupsResult.reason.message : undefined,
+            workspaceFolder
+          ),
+          this.groupNode(
+            "Pipeline Variables",
+            "pipelineDefinitions",
+            definitionsResult.status === "fulfilled"
+              ? responseItems(definitionsResult.value, "definitions")
+              : [],
+            definitionsResult.status === "rejected" ? definitionsResult.reason.message : undefined,
+            workspaceFolder
+          ),
+          this.groupNode(
+            "Pending Approvals",
+            "approvals",
+            approvalsResult.status === "fulfilled"
+              ? responseItems(approvalsResult.value, "approvals")
+              : [],
+            approvalsResult.status === "rejected" ? approvalsResult.reason.message : undefined,
+            workspaceFolder
           )
         ];
+      }
+      if (element.section === "approvals") {
+        if (element.error) {
+          return [informationNode("Could not load approvals", element.error)];
+        }
+        return element.items.map(approval => {
+          const buildId = approval.pipeline?.owner?.id;
+          const pipelineName = approval.pipeline?.name;
+          const item = new vscode.TreeItem(
+            pipelineName || approval.instructions || `Approval ${String(approval.id).slice(0, 8)}`,
+            vscode.TreeItemCollapsibleState.None
+          );
+          item.id = `approval-${approval.id}`;
+          item.contextValue = "azurePipelineApproval";
+          item.description = [
+            buildId ? `Run #${buildId}` : "Pending",
+            approval.createdOn ? new Date(approval.createdOn).toLocaleString() : ""
+          ].filter(Boolean).join(" - ");
+          item.tooltip = [
+            approval.instructions,
+            ...(approval.steps || []).map(step =>
+              step.assignedApprover?.displayName
+                ? `Approver: ${step.assignedApprover.displayName}`
+                : ""
+            ),
+            approval.minRequiredApprovers
+              ? `Minimum approvers: ${approval.minRequiredApprovers}`
+              : ""
+          ].filter(Boolean).join("\n");
+          item.iconPath = new vscode.ThemeIcon("shield");
+          item.approval = approval;
+          item.workspaceFolder = workspaceFolder;
+          if (buildId) {
+            item.command = {
+              command: "azure-pipelines.openRun",
+              title: "Open Related Run",
+              arguments: [{
+                run: {id: buildId},
+                pipeline: {workspaceFolder}
+              }]
+            };
+          }
+          return item;
+        });
       }
       if (element.section === "environments") {
         if (element.error) {
@@ -2276,13 +3703,14 @@ class LibraryProvider {
           const item = new vscode.TreeItem(environment.name, vscode.TreeItemCollapsibleState.None);
           item.contextValue = "azureEnvironment";
           item.environment = environment;
+          item.workspaceFolder = workspaceFolder;
           item.description = environment.description || `Environment ${environment.id}`;
           item.iconPath = new vscode.ThemeIcon("cloud");
           item.tooltip = `Azure Pipelines environment ${environment.name}`;
           item.command = {
             command: "azure-pipelines.openEnvironment",
             title: "Open Environment in Browser",
-            arguments: [{environment}]
+            arguments: [{environment, workspaceFolder}]
           };
           return item;
         });
@@ -2301,6 +3729,46 @@ class LibraryProvider {
           item.description = group.type === "AzureKeyVault" ? "Key Vault" : `${Object.keys(group.variables || {}).length} variables`;
           item.iconPath = new vscode.ThemeIcon(group.type === "AzureKeyVault" ? "key" : "library");
           item.group = group;
+          item.workspaceFolder = workspaceFolder;
+          return item;
+        });
+      }
+      if (element.section === "pipelineDefinitions") {
+        if (element.error) {
+          return [informationNode("Could not load pipeline definitions", element.error)];
+        }
+        return element.items.map(definition => {
+          const item = new vscode.TreeItem(
+            definition.name || `Pipeline ${definition.id}`,
+            vscode.TreeItemCollapsibleState.Collapsed
+          );
+          item.id = `pipeline-definition-${definition.id}`;
+          item.contextValue = "azurePipelineDefinitionVariables";
+          item.description = `Definition ${definition.id}`;
+          item.iconPath = new vscode.ThemeIcon("symbol-namespace");
+          item.definition = definition;
+          item.workspaceFolder = workspaceFolder;
+          return item;
+        });
+      }
+      if (element.definition) {
+        const definition = await api.getBuildDefinition(element.definition.id);
+        return Object.entries(definition.variables || {}).map(([name, variable]) => {
+          const isSecret = Boolean(variable.isSecret);
+          const item = new vscode.TreeItem(name, vscode.TreeItemCollapsibleState.None);
+          item.id = `pipeline-variable-${definition.id}-${name}`;
+          item.contextValue = isSecret
+            ? "azurePipelineVariableSecret"
+            : "azurePipelineVariable";
+          item.description = isSecret ? "Secret (value hidden)" : (variable.value ?? "");
+          item.tooltip = isSecret
+            ? "Secret value is hidden by Azure DevOps"
+            : `Value: ${variable.value ?? ""}`;
+          item.iconPath = new vscode.ThemeIcon(isSecret ? "lock" : "symbol-variable");
+          item.definition = definition;
+          item.variableName = name;
+          item.variable = variable;
+          item.workspaceFolder = workspaceFolder;
           return item;
         });
       }
@@ -2316,6 +3784,7 @@ class LibraryProvider {
           item.group = element.group;
           item.variableName = name;
           item.variable = variable;
+          item.workspaceFolder = workspaceFolder;
           return item;
         });
       }
@@ -2325,14 +3794,25 @@ class LibraryProvider {
     return [];
   }
 
-  groupNode(label, section, items, error) {
+  groupNode(label, section, items, error, workspaceFolder) {
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Collapsed);
     item.id = section;
     item.section = section;
     item.items = items;
     item.error = error;
-    item.contextValue = section === "environments" ? "azureEnvironments" : "azureVariableGroups";
-    item.iconPath = new vscode.ThemeIcon(section === "environments" ? "cloud" : "library");
+    item.workspaceFolder = workspaceFolder;
+    item.contextValue = {
+      environments: "azureEnvironments",
+      variableGroups: "azureVariableGroups",
+      pipelineDefinitions: "azurePipelineDefinitions",
+      approvals: "azurePipelineApprovals"
+    }[section];
+    item.iconPath = {
+      environments: new vscode.ThemeIcon("cloud"),
+      variableGroups: new vscode.ThemeIcon("library"),
+      pipelineDefinitions: new vscode.ThemeIcon("symbol-namespace"),
+      approvals: new vscode.ThemeIcon("shield")
+    }[section];
     item.description = error ? "Unavailable" : String(items.length);
     return item;
   }
@@ -2348,6 +3828,7 @@ module.exports = {
 === C:\Users\johnm\Documents\Technology\azdo-extension\src\yamlSupport.js ===
 "use strict";
 
+const path = require("node:path");
 const YAML = require("yaml");
 
 const EXPRESSION_FUNCTIONS = [
@@ -2381,7 +3862,8 @@ const EXPRESSION_FUNCTIONS = [
   ["failed", "failed()", "Tests whether a prior pipeline step failed."],
   ["canceled", "canceled()", "Tests whether the pipeline was canceled."],
   ["succeededOrFailed", "succeededOrFailed()", "Tests for success or failure, excluding cancellation."],
-  ["always", "always()", "Runs regardless of the outcome of prior work."]
+  ["always", "always()", "Runs regardless of the outcome of prior work."],
+  ["xor", "xor(value1, value2)", "Returns true when exactly one argument is true."]
 ].map(([name, signature, description]) => ({name, signature, description}));
 
 const FUNCTION_MAP = new Map(EXPRESSION_FUNCTIONS.map(item => [item.name, item]));
@@ -2404,6 +3886,275 @@ function parsePipelineYaml(text) {
   } catch {
     return undefined;
   }
+}
+
+function getTemplateReferenceAt(text, offset) {
+  let document;
+  try {
+    document = YAML.parseDocument(text, {uniqueKeys: false});
+  } catch {
+    return undefined;
+  }
+  const references = [];
+  const visit = node => {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    if (node.key && node.value) {
+      if (
+        node.key.value === "template" &&
+        typeof node.value.value === "string" &&
+        Array.isArray(node.value.range)
+      ) {
+        const [start, end] = node.value.range;
+        if (offset >= start && offset <= end) {
+          references.push({path: node.value.value, start, end});
+        }
+      }
+      visit(node.key);
+      visit(node.value);
+      return;
+    }
+    if (Array.isArray(node.items)) {
+      node.items.forEach(visit);
+    }
+  };
+  visit(document.contents);
+  return references.sort((left, right) => (left.end - left.start) - (right.end - right.start))[0];
+}
+
+function resolveTemplatePaths(templatePath, documentPath, workspaceRoot) {
+  if (
+    typeof templatePath !== "string" ||
+    !templatePath.trim() ||
+    /[$*@]/.test(templatePath)
+  ) {
+    return [];
+  }
+  const isFileAbsolute = /^[A-Za-z]:[\\/]/.test(templatePath);
+  const isRepoRooted = /^[\\/]/.test(templatePath) && !isFileAbsolute;
+  const normalizedPath = templatePath.replace(/[\\/]+/g, path.sep);
+  if (isFileAbsolute) {
+    return [path.resolve(normalizedPath)];
+  }
+  const root = workspaceRoot || path.dirname(documentPath);
+  const candidates = [
+    path.resolve(root, normalizedPath.replace(/^[\\/]+/, ""))
+  ];
+  if (!isRepoRooted) {
+    candidates.push(path.resolve(path.dirname(documentPath), normalizedPath));
+  }
+  return [...new Set(candidates)];
+}
+
+function parseTaskReference(reference) {
+  const match = typeof reference === "string" && reference.trim().match(/^([^@\s]+)@(\d+)$/);
+  return match ? {name: match[1].toLowerCase(), major: Number(match[2])} : undefined;
+}
+
+function taskDefinitionForReference(reference, definitions) {
+  const parsed = parseTaskReference(reference);
+  if (!parsed) {
+    return undefined;
+  }
+  return (definitions || [])
+    .filter(definition =>
+      typeof definition?.name === "string" &&
+      definition.name.toLowerCase() === parsed.name &&
+      Number(definition.version?.major) === parsed.major
+    )
+    .sort((left, right) =>
+      Number(right.version?.minor || 0) - Number(left.version?.minor || 0) ||
+      Number(right.version?.patch || 0) - Number(left.version?.patch || 0)
+    )[0];
+}
+
+function getTaskSteps(text) {
+  let document;
+  try {
+    document = YAML.parseDocument(text, {uniqueKeys: false});
+  } catch {
+    return [];
+  }
+  const steps = [];
+  const visit = node => {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    if (Array.isArray(node.items)) {
+      const taskPair = node.items.find(pair => pair?.key?.value === "task");
+      if (taskPair && typeof taskPair.value?.value === "string") {
+        steps.push({
+          node,
+          taskPair,
+          inputsPair: node.items.find(pair => pair?.key?.value === "inputs")
+        });
+      }
+      node.items.forEach(visit);
+    } else if (node.key) {
+      visit(node.key);
+      visit(node.value);
+    }
+  };
+  visit(document.contents);
+  return steps;
+}
+
+function lineIndentAt(text, offset) {
+  const lineStart = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+  const beforeOffset = text.slice(lineStart, offset);
+  return beforeOffset.match(/^[ \t]*/)[0].length;
+}
+
+function taskInputStepAt(text, offset) {
+  return getTaskSteps(text).find(candidate => {
+    if (!Array.isArray(candidate.inputsPair?.key?.range)) {
+      return false;
+    }
+    const inputs = candidate.inputsPair?.value;
+    const range = inputs?.range;
+    const inputIndent = lineIndentAt(text, candidate.inputsPair.key.range[0]);
+    const currentLineStart = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+    const currentLine = text.slice(currentLineStart, offset);
+    const insideInputNode = Array.isArray(range) && offset >= range[0] && offset <= range[1];
+    const startingEmptyInputLine = offset >= candidate.inputsPair.key.range[1] &&
+      lineIndentAt(text, offset) > inputIndent &&
+      /^\s*:\s*$/.test(text.slice(candidate.inputsPair.key.range[1], offset));
+    if (!insideInputNode && !startingEmptyInputLine) {
+      return false;
+    }
+    return lineIndentAt(text, offset) > inputIndent &&
+      (/^\s*$/.test(currentLine) ||
+        inputs?.items?.some(pair =>
+          Array.isArray(pair?.key?.range) &&
+          offset >= pair.key.range[0] &&
+          offset <= pair.key.range[1]
+        ));
+  });
+}
+
+function isTaskInputCompletionPosition(text, offset) {
+  return Boolean(taskInputStepAt(text, offset));
+}
+
+function getTaskInputCompletions(text, offset, definitions) {
+  const step = taskInputStepAt(text, offset);
+  if (!step) {
+    return [];
+  }
+  const definition = taskDefinitionForReference(step.taskPair.value.value, definitions);
+  if (!definition || !Array.isArray(definition.inputs)) {
+    return [];
+  }
+  const inputs = step.inputsPair.value;
+  const inputPairs = Array.isArray(inputs?.items) ? inputs.items : [];
+  const currentPair = inputPairs.find(pair =>
+    Array.isArray(pair?.key?.range) &&
+    offset >= pair.key.range[0] &&
+    offset <= pair.key.range[1]
+  );
+  const currentName = typeof currentPair?.key?.value === "string"
+    ? currentPair.key.value.toLowerCase()
+    : undefined;
+  const existingNames = new Set(inputPairs
+    .map(pair => pair?.key?.value)
+    .filter(name => typeof name === "string")
+    .map(name => name.toLowerCase())
+    .filter(name => name !== currentName));
+  return definition.inputs
+    .filter(input =>
+      typeof input?.name === "string" &&
+      !existingNames.has(input.name.toLowerCase())
+    )
+    .map(input => ({
+      label: input.name,
+      insertText: input.name,
+      kind: "property",
+      detail: input.required ? "Required task input" : "Task input",
+      documentation: input.helpMarkDown || undefined
+    }));
+}
+
+function getTaskInputDiagnostics(text, definitions) {
+  const diagnostics = [];
+  for (const step of getTaskSteps(text)) {
+    const reference = step.taskPair.value.value;
+    const definition = taskDefinitionForReference(reference, definitions);
+    if (!definition || !Array.isArray(definition.inputs)) {
+      continue;
+    }
+    const inputMap = step.inputsPair?.value;
+    const inputPairs = Array.isArray(inputMap?.items) ? inputMap.items : [];
+    const hasDynamicInputs =
+      (typeof inputMap?.value === "string" && inputMap.value.includes("${{")) ||
+      inputPairs.some(pair => typeof pair?.key?.value === "string" && pair.key.value.includes("$"));
+    const inputsByName = new Map();
+    for (const input of definition.inputs) {
+      if (typeof input?.name !== "string") {
+        continue;
+      }
+      inputsByName.set(input.name.toLowerCase(), input);
+      for (const alias of Array.isArray(input.aliases) ? input.aliases : []) {
+        if (typeof alias === "string") {
+          inputsByName.set(alias.toLowerCase(), input);
+        }
+      }
+    }
+    const suppliedNames = new Set();
+    for (const pair of inputPairs) {
+      const name = pair?.key?.value;
+      if (typeof name !== "string" || name.includes("$")) {
+        continue;
+      }
+      const input = inputsByName.get(name.toLowerCase());
+      if (!input) {
+        if (Array.isArray(pair.key.range)) {
+          diagnostics.push({
+            start: pair.key.range[0],
+            end: pair.key.range[1],
+            message: `Unknown input "${name}" for ${reference}.`
+          });
+        }
+        continue;
+      }
+      suppliedNames.add(input.name.toLowerCase());
+      const options = input.options && typeof input.options === "object"
+        ? Object.keys(input.options)
+        : [];
+      const value = pair.value?.value;
+      if (
+        options.length &&
+        (typeof value === "string" || typeof value === "number" || typeof value === "boolean") &&
+        !/[$]/.test(String(value)) &&
+        !options.some(option => String(option).toLowerCase() === String(value).toLowerCase()) &&
+        Array.isArray(pair.value?.range)
+      ) {
+        diagnostics.push({
+          start: pair.value.range[0],
+          end: pair.value.range[1],
+          message: `Invalid value "${value}" for task input "${input.name}". Expected one of: ${options.join(", ")}.`
+        });
+      }
+    }
+    for (const input of definition.inputs) {
+      if (
+        input?.required !== true ||
+        input.visibleRule ||
+        hasDynamicInputs ||
+        (input.defaultValue !== undefined && input.defaultValue !== "") ||
+        typeof input.name !== "string" ||
+        suppliedNames.has(input.name.toLowerCase())
+      ) {
+        continue;
+      }
+      diagnostics.push({
+        start: step.taskPair.value.range[0],
+        end: step.taskPair.value.range[1],
+        message: `Required task input "${input.name}" is missing for ${reference}.`
+      });
+    }
+  }
+  return diagnostics;
 }
 
 function isAzurePipelineDocument(uri, text = "") {
@@ -2525,6 +4276,109 @@ function expressionAt(text, offset) {
   return undefined;
 }
 
+function findExpressionEnd(text, bodyStart, close) {
+  let quote;
+  let nested = 0;
+  for (let index = bodyStart; index < text.length; index += 1) {
+    const character = text[index];
+    if (quote) {
+      if (character === quote) {
+        if (text[index + 1] === quote) {
+          index += 1;
+        } else {
+          quote = undefined;
+        }
+      } else if (character === "\\" && index + 1 < text.length) {
+        index += 1;
+      }
+      continue;
+    }
+    if (character === "'" || character === "\"") {
+      quote = character;
+      continue;
+    }
+    if (close === "]" && character === "[") {
+      nested += 1;
+      continue;
+    }
+    if (close === ")" && character === "(") {
+      nested += 1;
+      continue;
+    }
+    if ((close === "]" && character === "]") || (close === ")" && character === ")")) {
+      if (nested > 0) {
+        nested -= 1;
+      } else {
+        return index;
+      }
+      continue;
+    }
+    if (close !== "]" && close !== ")" && text.startsWith(close, index)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function expressionRanges(text) {
+  const delimiters = [
+    ["${{", "}}", "template"],
+    ["$[", "]", "runtime"],
+    ["$(", ")", "macro"]
+  ];
+  const ranges = [];
+  let searchFrom = 0;
+  while (searchFrom < text.length) {
+    let next;
+    for (const [open, close, kind] of delimiters) {
+      const start = text.indexOf(open, searchFrom);
+      if (start >= 0 && (!next || start < next.start)) {
+        next = {start, open, close, kind};
+      }
+    }
+    if (!next) {
+      break;
+    }
+    const bodyStart = next.start + next.open.length;
+    const closeStart = findExpressionEnd(text, bodyStart, next.close);
+    ranges.push({
+      kind: next.kind,
+      start: bodyStart,
+      end: closeStart < 0 ? text.length : closeStart
+    });
+    searchFrom = closeStart < 0 ? text.length : closeStart + next.close.length;
+  }
+  return ranges;
+}
+
+function maskStringLiterals(text) {
+  const characters = text.split("");
+  let quote;
+  for (let index = 0; index < characters.length; index += 1) {
+    const character = characters[index];
+    if (quote) {
+      characters[index] = " ";
+      if (character === quote) {
+        if (characters[index + 1] === quote) {
+          characters[index + 1] = " ";
+          index += 1;
+        } else {
+          quote = undefined;
+        }
+      } else if (character === "\\" && index + 1 < characters.length) {
+        characters[index + 1] = " ";
+        index += 1;
+      }
+      continue;
+    }
+    if (character === "'" || character === "\"") {
+      quote = character;
+      characters[index] = " ";
+    }
+  }
+  return characters.join("");
+}
+
 function getExpressionCompletions(text, offset) {
   const expression = expressionAt(text, offset);
   if (!expression) {
@@ -2614,12 +4468,56 @@ function getExpressionCompletions(text, offset) {
 }
 
 function getExpressionHover(text, offset) {
-  const word = text.slice(0, offset).match(/[A-Za-z_][A-Za-z0-9_.-]* *$/)?.[0]?.trim();
+  const lineStart = text.lastIndexOf("\n", offset - 1) + 1;
+  const lineEnd = text.indexOf("\n", offset);
+  const line = text.slice(lineStart, lineEnd < 0 ? text.length : lineEnd);
+  const condition = line.match(/^\s*(?:-\s*)?condition\s*:\s*/i);
+  const ranges = expressionRanges(text);
+  if (condition) {
+    const start = lineStart + condition[0].length;
+    ranges.push({
+      start,
+      end: lineEnd < 0 ? text.length : lineEnd
+    });
+  }
+  const range = ranges.find(candidate => offset >= candidate.start && offset <= candidate.end);
+  if (!range) {
+    return undefined;
+  }
+  const body = text.slice(range.start, range.end);
+  const maskedBody = maskStringLiterals(body);
+  const localOffset = offset - range.start;
+  const tokens = /[A-Za-z_][A-Za-z0-9_.-]*/g;
+  let match;
+  let word;
+  let tokenEnd;
+  while ((match = tokens.exec(maskedBody))) {
+    const end = match.index + match[0].length;
+    if (localOffset >= match.index && localOffset <= end) {
+      word = match[0];
+      tokenEnd = end;
+      break;
+    }
+  }
   if (!word) {
+    const literalTokens = /[A-Za-z_][A-Za-z0-9_.-]*/g;
+    while ((match = literalTokens.exec(body))) {
+      const end = match.index + match[0].length;
+      if (
+        localOffset >= match.index &&
+        localOffset <= end &&
+        SYSTEM_VARIABLES.includes(match[0])
+      ) {
+        return {
+          title: `${match[0]} variable`,
+          body: "A predefined Azure Pipelines variable. Availability depends on the pipeline, stage, job, and expression phase."
+        };
+      }
+    }
     return undefined;
   }
   const fn = FUNCTION_MAP.get(word);
-  if (fn) {
+  if (fn && /^\s*\(/.test(body.slice(tokenEnd))) {
     return {title: `Azure Pipelines expression: ${fn.signature}`, body: fn.description};
   }
   const context = CONTEXTS.find(([name]) => name === word);
@@ -2632,6 +4530,252 @@ function getExpressionHover(text, offset) {
   return undefined;
 }
 
+function tokenizeExpression(body, baseOffset, diagnostics) {
+  const tokens = [];
+  let index = 0;
+  while (index < body.length) {
+    const character = body[index];
+    if (/\s/.test(character)) {
+      index += 1;
+      continue;
+    }
+    if (character === "'" || character === "\"") {
+      const start = index;
+      const quote = character;
+      index += 1;
+      let closed = false;
+      while (index < body.length) {
+        if (body[index] === quote) {
+          if (quote === "'" && body[index + 1] === quote) {
+            index += 2;
+          } else {
+            index += 1;
+            closed = true;
+            break;
+          }
+        } else if (quote === "\"" && body[index] === "\\" && index + 1 < body.length) {
+          index += 2;
+        } else {
+          index += 1;
+        }
+      }
+      if (!closed) {
+        diagnostics.push({
+          start: baseOffset + start,
+          end: baseOffset + body.length,
+          message: "Unclosed string literal in Azure Pipelines expression."
+        });
+      }
+      tokens.push({type: "string", value: body.slice(start, index), start, end: index});
+      continue;
+    }
+    if (/[A-Za-z_]/.test(character)) {
+      const start = index;
+      index += 1;
+      while (index < body.length && /[A-Za-z0-9_-]/.test(body[index])) {
+        index += 1;
+      }
+      tokens.push({type: "identifier", value: body.slice(start, index), start, end: index});
+      continue;
+    }
+    if (/\d/.test(character) || ((character === "-" || character === ".") && /\d/.test(body[index + 1] || ""))) {
+      const start = index;
+      const number = body.slice(index).match(/^-?(?:\d+(?:\.\d*)?|\.\d+)/)[0];
+      index += number.length;
+      tokens.push({type: "number", value: number, start, end: index});
+      continue;
+    }
+    if ("()[],.".includes(character)) {
+      tokens.push({type: character, value: character, start: index, end: index + 1});
+      index += 1;
+      continue;
+    }
+    tokens.push({type: "invalid", value: character, start: index, end: index + 1});
+    index += 1;
+  }
+  return tokens;
+}
+
+function parseExpressionBody(body, baseOffset) {
+  const diagnostics = [];
+  const tokens = tokenizeExpression(body, baseOffset, diagnostics);
+  let index = 0;
+  const peek = () => tokens[index];
+  const report = (message, token = peek()) => {
+    const start = token ? token.start : body.length;
+    const end = token ? token.end : body.length;
+    diagnostics.push({start: baseOffset + start, end: baseOffset + end, message});
+  };
+  const reportUnknownFunction = token => {
+    const known = EXPRESSION_FUNCTIONS.some(
+      fn => fn.name.toLowerCase() === token.value.toLowerCase()
+    );
+    if (!known) {
+      diagnostics.push({
+        start: baseOffset + token.start,
+        end: baseOffset + token.end,
+        message: `Unknown Azure Pipelines expression function "${token.value}".`
+      });
+    }
+  };
+  const synchronize = closing => {
+    while (peek() && peek().type !== "," && peek().type !== closing) {
+      index += 1;
+    }
+  };
+  let parseExpression;
+  const parsePostfix = () => {
+    while (peek()) {
+      if (peek().type === ".") {
+        index += 1;
+        if (peek()?.type === "identifier") {
+          index += 1;
+        } else {
+          report("Expected a property name after '.'.");
+          return;
+        }
+      } else if (peek().type === "[") {
+        index += 1;
+        if (peek()?.type === "]") {
+          report("Expected an index expression.");
+          index += 1;
+          continue;
+        }
+        parseExpression();
+        if (peek()?.type === "]") {
+          index += 1;
+        } else {
+          report("Expected ']' to close the index expression.");
+          return;
+        }
+      } else {
+        return;
+      }
+    }
+  };
+  const parseCallArguments = () => {
+    if (peek()?.type === ")") {
+      index += 1;
+      return;
+    }
+    while (peek()) {
+      if (peek().type === "," || peek().type === ")") {
+        report("Expected an expression argument.");
+        if (peek().type === ")") {
+          index += 1;
+          return;
+        }
+        index += 1;
+        continue;
+      }
+      parseExpression();
+      if (peek()?.type === ",") {
+        index += 1;
+        if (peek()?.type === ")") {
+          report("Expected an expression argument.");
+          index += 1;
+          return;
+        }
+        continue;
+      }
+      if (peek()?.type === ")") {
+        index += 1;
+        return;
+      }
+      if (!peek()) {
+        report("Expected ')' to close the function call.");
+        return;
+      }
+      report("Expected ',' or ')' after the function argument.");
+      synchronize(")");
+      if (peek()?.type === ",") {
+        index += 1;
+      } else if (peek()?.type === ")") {
+        index += 1;
+        return;
+      }
+    }
+    report("Expected ')' to close the function call.");
+  };
+  parseExpression = () => {
+    const token = peek();
+    if (!token) {
+      report("Expected an expression.");
+      return;
+    }
+    if (token.type === "identifier") {
+      index += 1;
+      const keyword = token.value.toLowerCase();
+      if ((keyword === "if" || keyword === "elseif") && peek()?.type !== "(") {
+        if (!peek()) {
+          report(`Expected an expression after "${token.value}".`, token);
+        } else {
+          parseExpression();
+        }
+        return;
+      }
+      if (keyword === "each") {
+        if (peek()?.type !== "identifier") {
+          report("Expected an iteration variable after 'each'.");
+          return;
+        }
+        index += 1;
+        if (peek()?.type !== "identifier" || peek().value.toLowerCase() !== "in") {
+          report("Expected 'in' after the iteration variable.");
+          return;
+        }
+        index += 1;
+        parseExpression();
+        return;
+      }
+      if (peek()?.type === "(") {
+        reportUnknownFunction(token);
+        index += 1;
+        parseCallArguments();
+      }
+      parsePostfix();
+      return;
+    }
+    if (token.type === "string" || token.type === "number") {
+      index += 1;
+      parsePostfix();
+      return;
+    }
+    if (token.type === "(") {
+      index += 1;
+      if (peek()?.type === ")") {
+        report("Expected an expression inside parentheses.");
+        index += 1;
+        return;
+      }
+      parseExpression();
+      if (peek()?.type === ")") {
+        index += 1;
+      } else {
+        report("Expected ')' to close the parenthesized expression.");
+      }
+      parsePostfix();
+      return;
+    }
+    if (token.type === "invalid") {
+      report(`Unexpected character "${token.value}" in Azure Pipelines expression.`, token);
+    } else {
+      report(`Unexpected token "${token.value}" in Azure Pipelines expression.`, token);
+    }
+    index += 1;
+  };
+  if (!tokens.length) {
+    report("Expected an Azure Pipelines expression.");
+    return diagnostics;
+  }
+  parseExpression();
+  while (peek()) {
+    report(`Unexpected token "${peek().value}" in Azure Pipelines expression.`);
+    index += 1;
+  }
+  return diagnostics;
+}
+
 function getExpressionDiagnostics(text) {
   const diagnostics = [];
   const openers = [["${{", "}}"], ["$[", "]"]];
@@ -2642,28 +4786,58 @@ function getExpressionDiagnostics(text) {
       if (start < 0) {
         break;
       }
-      const end = text.indexOf(close, start + open.length);
+      const bodyStart = start + open.length;
+      const end = findExpressionEnd(text, bodyStart, close);
       if (end < 0) {
         diagnostics.push({start, end: start + open.length, message: `Unclosed Azure Pipelines expression; expected "${close}".`});
         break;
       }
-      const bodyStart = start + open.length;
       const body = text.slice(bodyStart, end);
-      const calls = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
-      let match;
-      while ((match = calls.exec(body))) {
-        if (!FUNCTION_MAP.has(match[1])) {
-          const functionStart = bodyStart + match.index;
-          diagnostics.push({
-            start: functionStart,
-            end: functionStart + match[1].length,
-            message: `Unknown Azure Pipelines expression function "${match[1]}".`
-          });
-        }
-      }
+      diagnostics.push(...parseExpressionBody(body, bodyStart));
       searchFrom = end + close.length;
     }
   }
+  let yamlDocument;
+  try {
+    yamlDocument = YAML.parseDocument(text, {uniqueKeys: false});
+  } catch {
+    return diagnostics;
+  }
+  const visitConditions = node => {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    if (Array.isArray(node.items)) {
+      node.items.forEach(visitConditions);
+      return;
+    }
+    if (node.key?.value === "condition" && typeof node.value?.value === "string") {
+      const scalar = node.value;
+      if (
+        !Array.isArray(scalar.range) ||
+        scalar.type === "BLOCK_LITERAL" ||
+        scalar.type === "BLOCK_FOLDED" ||
+        /\$\{\{|\$\[|\$\(/.test(scalar.value)
+      ) {
+        return;
+      }
+      const body = scalar.value.trim();
+      if (!body) {
+        return;
+      }
+      const quoteOffset = String(scalar.type || "").startsWith("QUOTE_") ? 1 : 0;
+      const leadingWhitespace = scalar.value.length - scalar.value.trimStart().length;
+      diagnostics.push(...parseExpressionBody(
+        body,
+        scalar.range[0] + quoteOffset + leadingWhitespace
+      ));
+    }
+    if (node.key) {
+      visitConditions(node.key);
+      visitConditions(node.value);
+    }
+  };
+  visitConditions(yamlDocument.contents);
   return diagnostics;
 }
 
@@ -2672,11 +4846,16 @@ module.exports = {
   getExpressionCompletions,
   getExpressionDiagnostics,
   getExpressionHover,
+  getTemplateReferenceAt,
+  getTaskInputCompletions,
+  getTaskInputDiagnostics,
+  isTaskInputCompletionPosition,
   isAzurePipelineDocument,
   getParameterDefinitions,
   parameterPromptKind,
   parsePipelineYaml,
   pipelineNames,
+  resolveTemplatePaths,
   typedParameterValue
 };
 

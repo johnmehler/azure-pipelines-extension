@@ -3,7 +3,14 @@
 const API_VERSION = "7.1";
 
 class AzureDevOpsApi {
-  constructor({organization, project, token, authType = "pat", fetchImpl = globalThis.fetch}) {
+  constructor({
+    organization,
+    project,
+    token,
+    authType = "pat",
+    fetchImpl = globalThis.fetch,
+    workspaceFolder
+  }) {
     if (!organization || !project || !token) {
       throw new Error("Azure DevOps organization, project, and an access token are required.");
     }
@@ -15,6 +22,7 @@ class AzureDevOpsApi {
     this.project = project.trim();
     this.token = token;
     this.authType = authType;
+    this.workspaceFolder = workspaceFolder;
     this.fetch = fetchImpl;
     this.projectDetails = undefined;
     this.resolvedProjectId = undefined;
@@ -77,6 +85,25 @@ class AzureDevOpsApi {
 
   listPipelines() {
     return this.request(this.projectUrl("pipelines", {$top: 200}));
+  }
+
+  listBuildDefinitions() {
+    return this.request(this.projectUrl("build/definitions", {$top: 200}));
+  }
+
+  getBuildDefinition(definitionId) {
+    return this.request(this.projectUrl(
+      `build/definitions/${encodeURIComponent(definitionId)}`
+    ));
+  }
+
+  updateBuildDefinition(definition) {
+    return this.request(this.projectUrl(
+      `build/definitions/${encodeURIComponent(definition.id)}`
+    ), {
+      method: "PUT",
+      body: definition
+    });
   }
 
   async getProject() {
@@ -173,10 +200,65 @@ class AzureDevOpsApi {
     return this.request(this.projectUrl(`build/builds/${encodeURIComponent(runId)}${timeline}`));
   }
 
-  getBuildLog(runId, logId) {
+  getBuild(runId) {
+    return this.request(this.projectUrl(`build/builds/${encodeURIComponent(runId)}`));
+  }
+
+  getBuildLog(runId, logId, startLine) {
     return this.request(this.projectUrl(
-      `build/builds/${encodeURIComponent(runId)}/logs/${encodeURIComponent(logId)}`
+      `build/builds/${encodeURIComponent(runId)}/logs/${encodeURIComponent(logId)}`,
+      startLine === undefined ? {} : {startLine}
     ), {accept: "text/plain"});
+  }
+
+  listBuildArtifacts(runId) {
+    return this.request(this.projectUrl(
+      `build/builds/${encodeURIComponent(runId)}/artifacts`
+    ));
+  }
+
+  async downloadBuildArtifact(runId, artifactName) {
+    const url = this.projectUrl(
+      `build/builds/${encodeURIComponent(runId)}/artifacts`,
+      {artifactName, "$format": "zip"}
+    );
+    const authorization = this.authType === "bearer"
+      ? `Bearer ${this.token}`
+      : `Basic ${Buffer.from(`:${this.token}`).toString("base64")}`;
+    const response = await this.fetch(url, {
+      headers: {Authorization: authorization, Accept: "application/zip"}
+    });
+    if (!response.ok) {
+      throw new Error(`Could not download the artifact (${response.status}).`);
+    }
+    return Buffer.from(await response.arrayBuffer());
+  }
+
+  retryStage(runId, stageRefName, {forceRetryAllJobs = false} = {}) {
+    return this.request(this.projectUrl(
+      `build/builds/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageRefName)}`
+    ), {
+      method: "PATCH",
+      body: {state: "retry", forceRetryAllJobs}
+    });
+  }
+
+  listPendingApprovals() {
+    return this.request(this.projectUrl("pipelines/approvals", {
+      state: "pending",
+      "$expand": "steps"
+    }));
+  }
+
+  updateApproval(approvalId, status, comment) {
+    return this.request(this.projectUrl("pipelines/approvals"), {
+      method: "PATCH",
+      body: [{
+        approvalId,
+        status,
+        comment: comment || undefined
+      }]
+    });
   }
 
   cancelRun(runId) {

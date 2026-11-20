@@ -201,6 +201,86 @@ test("cancel and retry use Azure DevOps build update operations", async () => {
   assert.deepEqual(JSON.parse(requests[1].options.body), {id: 13});
 });
 
+test("stage retries and approval decisions use Azure DevOps update APIs", async () => {
+  const requests = [];
+  const api = createApi(async (url, options) => {
+    requests.push({url: new URL(url), options});
+    return {ok: true, text: async () => "{}"};
+  });
+
+  await api.retryStage(12, "Deploy_Production");
+  await api.listPendingApprovals();
+  await api.updateApproval("approval-guid", "rejected", "Needs changes");
+
+  assert.match(requests[0].url.pathname, /builds\/12\/stages\/Deploy_Production$/);
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    state: "retry",
+    forceRetryAllJobs: false
+  });
+  assert.equal(requests[1].url.searchParams.get("state"), "pending");
+  assert.equal(requests[1].url.searchParams.get("$expand"), "steps");
+  assert.deepEqual(JSON.parse(requests[2].options.body), [{
+    approvalId: "approval-guid",
+    status: "rejected",
+    comment: "Needs changes"
+  }]);
+});
+
+test("pipeline definition variables update through the build definitions API", async () => {
+  const requests = [];
+  const api = createApi(async (url, options) => {
+    requests.push({url: new URL(url), options});
+    return {ok: true, text: async () => "{}"};
+  });
+
+  await api.updateBuildDefinition({
+    id: 14,
+    revision: 3,
+    variables: {configuration: {value: "Release"}}
+  });
+
+  assert.match(requests[0].url.pathname, /build\/definitions\/14$/);
+  assert.equal(requests[0].options.method, "PUT");
+  assert.deepEqual(JSON.parse(requests[0].options.body).variables, {
+    configuration: {value: "Release"}
+  });
+});
+
+test("artifact listing and log tail requests include their query parameters", async () => {
+  const requests = [];
+  const api = createApi(async url => {
+    requests.push(new URL(url));
+    return {ok: true, text: async () => '{"value":[]}'};
+  });
+
+  await api.listBuildArtifacts(12);
+  await api.getBuildLog(12, 7, 41);
+
+  assert.match(requests[0].pathname, /builds\/12\/artifacts$/);
+  assert.match(requests[1].pathname, /builds\/12\/logs\/7$/);
+  assert.equal(requests[1].searchParams.get("startLine"), "41");
+});
+
+test("artifact downloads request a ZIP and return binary content", async () => {
+  let requestUrl;
+  let requestOptions;
+  const api = createApi(async (url, options) => {
+    requestUrl = new URL(url);
+    requestOptions = options;
+    return {
+      ok: true,
+      arrayBuffer: async () => Uint8Array.from([80, 75, 3, 4]).buffer
+    };
+  });
+
+  const content = await api.downloadBuildArtifact(12, "drop");
+
+  assert.equal(requestUrl.searchParams.get("artifactName"), "drop");
+  assert.equal(requestUrl.searchParams.get("$format"), "zip");
+  assert.equal(requestOptions.headers.Authorization, `Basic ${Buffer.from(":test-pat").toString("base64")}`);
+  assert.deepEqual([...content], [80, 75, 3, 4]);
+});
+
 test("API errors contain the status and server message", async () => {
   const api = createApi(async () => ({
     ok: false,

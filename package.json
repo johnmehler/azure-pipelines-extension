@@ -19,7 +19,7 @@
   ],
   "scripts": {
     "test": "node --test",
-    "check": "node --check src/api.js && node --check src/helpers.js && node --check src/yamlSupport.js && node --check src/providers.js && node --check src/extension.js",
+    "check": "node --check src/api.js && node --check src/git.js && node --check src/helpers.js && node --check src/logViewer.js && node --check src/yamlSupport.js && node --check src/providers.js && node --check src/extension.js",
     "build": "esbuild ./src/extension.js --bundle --platform=node --target=node18 --external:vscode --outfile=dist/extension.js",
     "vscode:prepublish": "npm run check && npm run build && npm test"
   },
@@ -137,6 +137,16 @@
         "category": "Azure Pipelines"
       },
       {
+        "command": "azure-pipelines.retryStage",
+        "title": "Retry Stage",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.retryJob",
+        "title": "Retry Failed Jobs in Stage",
+        "category": "Azure Pipelines"
+      },
+      {
         "command": "azure-pipelines.openLogs",
         "title": "Open Logs",
         "category": "Azure Pipelines"
@@ -144,6 +154,21 @@
       {
         "command": "azure-pipelines.openLogsInBrowser",
         "title": "Open Step in Browser",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.downloadArtifact",
+        "title": "Download Pipeline Artifact",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.approveApproval",
+        "title": "Approve Pipeline Gate",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.rejectApproval",
+        "title": "Reject Pipeline Gate",
         "category": "Azure Pipelines"
       },
       {
@@ -179,6 +204,21 @@
       {
         "command": "azure-pipelines.copyVariableValue",
         "title": "Copy Variable Value",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.addPipelineVariable",
+        "title": "Add Pipeline Variable",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.updatePipelineVariable",
+        "title": "Update Pipeline Variable",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.deletePipelineVariable",
+        "title": "Delete Pipeline Variable",
         "category": "Azure Pipelines"
       }
     ],
@@ -249,6 +289,18 @@
           "when": "viewItem == azurePipelineRunCompleted"
         },
         {
+          "command": "azure-pipelines.retryStage",
+          "when": "viewItem == azurePipelineStageRetry"
+        },
+        {
+          "command": "azure-pipelines.retryJob",
+          "when": "viewItem == azurePipelineJobRetry"
+        },
+        {
+          "command": "azure-pipelines.downloadArtifact",
+          "when": "viewItem == azurePipelineArtifact"
+        },
+        {
           "command": "azure-pipelines.openLogs",
           "when": "viewItem == azurePipelineLog"
         },
@@ -293,6 +345,34 @@
         {
           "command": "azure-pipelines.copyVariableValue",
           "when": "viewItem == azureLibraryVariable"
+        },
+        {
+          "command": "azure-pipelines.approveApproval",
+          "when": "viewItem == azurePipelineApproval"
+        },
+        {
+          "command": "azure-pipelines.rejectApproval",
+          "when": "viewItem == azurePipelineApproval"
+        },
+        {
+          "command": "azure-pipelines.addPipelineVariable",
+          "when": "viewItem == azurePipelineDefinitionVariables"
+        },
+        {
+          "command": "azure-pipelines.updatePipelineVariable",
+          "when": "viewItem =~ /azurePipelineVariable/"
+        },
+        {
+          "command": "azure-pipelines.deletePipelineVariable",
+          "when": "viewItem =~ /azurePipelineVariable/"
+        },
+        {
+          "command": "azure-pipelines.copyVariable",
+          "when": "viewItem =~ /azurePipelineVariable/"
+        },
+        {
+          "command": "azure-pipelines.copyVariableValue",
+          "when": "viewItem == azurePipelineVariable"
         }
       ]
     },
