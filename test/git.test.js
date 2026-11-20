@@ -3,7 +3,21 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const {AzureDevOpsApi} = require("../src/api");
-const {parseAzureDevOpsRemote, parseGitRemotes} = require("../src/git");
+const {parseAzureDevOpsProjectUrl, parseAzureDevOpsRemote, parseGitRemotes} = require("../src/git");
+
+test("full Azure DevOps Services project URLs provide organization and project", () => {
+  assert.deepEqual(
+    parseAzureDevOpsProjectUrl("https://dev.azure.com/contoso/My%20Project/_build?definitionId=42"),
+    {organization: "contoso", project: "My Project"}
+  );
+  assert.deepEqual(
+    parseAzureDevOpsProjectUrl("https://contoso.visualstudio.com/DefaultCollection/Platform/_build"),
+    {organization: "contoso", project: "Platform"}
+  );
+  assert.equal(parseAzureDevOpsProjectUrl("https://dev.azure.com/contoso"), undefined);
+  assert.equal(parseAzureDevOpsProjectUrl("https://example.com/contoso/Platform"), undefined);
+  assert.equal(parseAzureDevOpsProjectUrl("http://dev.azure.com/contoso/Platform"), undefined);
+});
 
 test("Azure DevOps HTTPS remotes discover organization, project, and repository", () => {
   assert.deepEqual(

@@ -8,7 +8,7 @@ const {promisify} = require("util");
 const vscode = require("vscode");
 const {AzureDevOpsApi} = require("./api");
 const {normalizeVariables, parseJsonObject, webLogUrl, webRunUrl} = require("./helpers");
-const {parseGitRemotes} = require("./git");
+const {parseAzureDevOpsProjectUrl, parseGitRemotes} = require("./git");
 const {mergeLogContent, renderErrors, renderLogBody, renderLogHtml} = require("./logViewer");
 const {LibraryProvider, PipelineProvider, responseItems} = require("./providers");
 const {
@@ -253,62 +253,83 @@ function activate(context) {
       if (!targetType) {
         return false;
       }
-      const serverUrl = targetType.value === "server"
-        ? await vscode.window.showInputBox({
-            title: "Azure DevOps Server connection",
-            prompt: "Collection URL, for example https://ado.example.com/tfs/DefaultCollection",
-            value: values.serverUrl || "",
-            ignoreFocusOut: true,
-            validateInput(value) {
-              try {
-                const url = new URL(value);
-                return url.protocol === "https:" &&
-                  !url.username &&
-                  !url.password &&
-                  !url.search &&
-                  !url.hash
-                  ? undefined
-                  : "Use an HTTPS collection URL without credentials, query, or fragment.";
-              } catch {
-                return "Enter a valid collection URL.";
-              }
+      let serverUrl = "";
+      let organization;
+      let project;
+      if (targetType.value === "server") {
+        serverUrl = await vscode.window.showInputBox({
+          title: "Azure DevOps Server connection",
+          prompt: "Collection URL, for example https://ado.example.com/tfs/DefaultCollection",
+          value: values.serverUrl || "",
+          ignoreFocusOut: true,
+          validateInput(value) {
+            try {
+              const url = new URL(value);
+              return url.protocol === "https:" &&
+                !url.username &&
+                !url.password &&
+                !url.search &&
+                !url.hash
+                ? undefined
+                : "Use an HTTPS collection URL without credentials, query, or fragment.";
+            } catch {
+              return "Enter a valid collection URL.";
             }
-          })
-        : "";
-      if (serverUrl === undefined) {
-        return false;
-      }
-      const organizationValue = await vscode.window.showInputBox({
-        title: "Azure DevOps connection",
-        prompt: targetType.value === "server"
-          ? "Optional collection label (the collection URL above is used for API requests)"
-          : "Organization name from https://dev.azure.com/{organization}",
-        value: values.organization,
-        ignoreFocusOut: true
-      });
-      if (organizationValue === undefined) {
-        return false;
-      }
-      const organization = organizationValue.trim() || (serverUrl ? "server" : "");
-      if (!organization) {
-        return false;
-      }
-      const project = await vscode.window.showInputBox({
-        title: "Azure DevOps connection",
-        prompt: values.repository
-          ? `Detected from Git remote for repository "${values.repository}"`
-          : "Project name or ID",
-        value: values.project,
-        ignoreFocusOut: true
-      });
-      if (!project?.trim()) {
-        return false;
+          }
+        });
+        if (serverUrl === undefined) {
+          return false;
+        }
+        const organizationValue = await vscode.window.showInputBox({
+          title: "Azure DevOps Server connection",
+          prompt: "Optional collection label (the collection URL above is used for API requests)",
+          value: values.organization,
+          ignoreFocusOut: true
+        });
+        if (organizationValue === undefined) {
+          return false;
+        }
+        organization = organizationValue.trim() || "server";
+        project = await vscode.window.showInputBox({
+          title: "Azure DevOps Server connection",
+          prompt: values.repository
+            ? `Detected from Git remote for repository "${values.repository}"`
+            : "Project name or ID",
+          value: values.project,
+          ignoreFocusOut: true
+        });
+        if (!project?.trim()) {
+          return false;
+        }
+      } else {
+        const projectUrl = await vscode.window.showInputBox({
+          title: "Azure DevOps connection",
+          prompt: "Paste the full project URL, for example https://dev.azure.com/organization/project",
+          value: values.organization && values.project
+            ? `https://dev.azure.com/${encodeURIComponent(values.organization)}/${encodeURIComponent(values.project)}`
+            : "",
+          ignoreFocusOut: true,
+          validateInput(value) {
+            return parseAzureDevOpsProjectUrl(value)
+              ? undefined
+              : "Enter a full HTTPS project URL from dev.azure.com or an organization.visualstudio.com site.";
+          }
+        });
+        if (projectUrl === undefined) {
+          return false;
+        }
+        const parsedUrl = parseAzureDevOpsProjectUrl(projectUrl);
+        if (!parsedUrl) {
+          return false;
+        }
+        organization = parsedUrl.organization;
+        project = parsedUrl.project;
       }
       const authOptions = targetType.value === "server"
         ? [{label: "Personal access token", description: "Stored in VS Code SecretStorage", value: "pat"}]
         : [
-            {label: "Microsoft account sign-in", description: "Recommended; token is managed by VS Code", value: "microsoft"},
-            {label: "Personal access token", description: "Stored in VS Code SecretStorage", value: "pat"}
+            {label: "Microsoft account sign-in", description: "Uses your VS Code Microsoft session", value: "microsoft"},
+            {label: "Personal access token", description: "Use if sign-in is blocked; stored securely by VS Code", value: "pat"}
           ];
       const selectedAuth = await vscode.window.showQuickPick(authOptions, {
         placeHolder: "Choose Azure DevOps authentication"
@@ -316,8 +337,9 @@ function activate(context) {
       if (!selectedAuth) {
         return false;
       }
+      let authMethod = selectedAuth.value;
       let token;
-      if (selectedAuth.value === "microsoft") {
+      if (authMethod === "microsoft") {
         try {
           const session = await vscode.authentication.getSession(
             "microsoft",
@@ -326,13 +348,20 @@ function activate(context) {
           );
           token = session?.accessToken;
         } catch (error) {
-          void vscode.window.showErrorMessage(`Microsoft sign-in failed: ${error.message}`);
+          const fallback = await vscode.window.showErrorMessage(
+            `Microsoft sign-in could not get an Azure DevOps token. Your organization's access policy may block this resource. ${error.message}`,
+            "Use a PAT instead"
+          );
+          if (fallback !== "Use a PAT instead") {
+            return false;
+          }
+          authMethod = "pat";
+        }
+        if (authMethod === "microsoft" && !token) {
           return false;
         }
-        if (!token) {
-          return false;
-        }
-      } else {
+      }
+      if (authMethod === "pat") {
         const savedPat = await secretStorage.get(PAT_SECRET_KEY);
         const enteredPat = await vscode.window.showInputBox({
           title: "Azure DevOps connection",
@@ -356,12 +385,14 @@ function activate(context) {
       await settings.update("organization", organization, target);
       await settings.update("project", project.trim(), target);
       await settings.update("serverUrl", serverUrl || "", target);
-      await settings.update("authMethod", selectedAuth.value, target);
-      if (selectedAuth.value === "pat") {
+      await settings.update("authMethod", authMethod, target);
+      if (authMethod === "pat") {
         await secretStorage.store(PAT_SECRET_KEY, token);
       }
       await vscode.window.showInformationMessage(
-        `${targetType.label} connection saved using ${selectedAuth.label}.`
+        `${targetType.label} connection saved using ${
+          authMethod === "pat" ? "a personal access token" : selectedAuth.label
+        }.`
       );
       refreshAll();
       return targetFolder || true;

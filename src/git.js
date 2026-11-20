@@ -1,5 +1,36 @@
 "use strict";
 
+function parseAzureDevOpsProjectUrl(projectUrl) {
+  if (typeof projectUrl !== "string" || !projectUrl.trim()) {
+    return undefined;
+  }
+
+  let url;
+  let path;
+  try {
+    url = new URL(projectUrl.trim());
+    path = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== "https:" || url.username || url.password) {
+    return undefined;
+  }
+
+  const host = url.hostname.toLowerCase();
+  let organization;
+  let project;
+  if (host === "dev.azure.com") {
+    [organization, project] = path;
+  } else if (host.endsWith(".visualstudio.com")) {
+    organization = url.hostname.slice(0, -".visualstudio.com".length);
+    const projectIndex = path[0]?.toLowerCase() === "defaultcollection" ? 1 : 0;
+    project = path[projectIndex];
+  }
+
+  return organization && project ? {organization, project} : undefined;
+}
+
 function parseAzureDevOpsRemote(remote) {
   if (typeof remote !== "string" || !remote.trim()) {
     return undefined;
@@ -90,4 +121,4 @@ function parseGitRemotes(output) {
   return [...unique.values()];
 }
 
-module.exports = {parseAzureDevOpsRemote, parseGitRemotes};
+module.exports = {parseAzureDevOpsProjectUrl, parseAzureDevOpsRemote, parseGitRemotes};
