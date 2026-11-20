@@ -5,6 +5,4 @@
 test/**
 .gitignore
 .vscodeignore
-node_modules/yaml/browser/**
-node_modules/yaml/README.md
-node_modules/yaml/bin.mjs
+node_modules/**
