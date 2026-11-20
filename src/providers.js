@@ -247,7 +247,7 @@ class PipelineProvider {
         const pipelines = responseItems(await api.listPipelines(), "pipelines");
         return pipelines.map(pipeline => pipelineNode(
           pipeline,
-          this.getPinnedIds(),
+          this.getPinnedIds(element.workspaceFolder),
           element.workspaceFolder
         ));
       }
@@ -260,7 +260,11 @@ class PipelineProvider {
         if (!pipelines.length) {
           return [informationNode("No pipelines found", "Check the selected project and permissions")];
         }
-        return pipelines.map(item => pipelineNode(item, this.getPinnedIds()));
+        return pipelines.map(item => pipelineNode(
+          item,
+          this.getPinnedIds(workspaceFolder),
+          workspaceFolder
+        ));
       }
 
       if (element.previousAttempt && element.run && element.pipeline) {
@@ -398,13 +402,14 @@ class PipelineProvider {
     }
     return [...grouped.values()].map(item => pipelineNode(
       item.pipeline,
-      this.getPinnedIds(),
+      this.getPinnedIds(workspaceFolder),
       workspaceFolder
     ));
   }
 
   async getTimeline(api, run, timelineId) {
-    const key = `${api.organization}/${api.project}:${run.id}:${timelineId || ""}`;
+    const connection = api.serverUrl || api.organization;
+    const key = `${connection}/${api.project}:${run.id}:${timelineId || ""}`;
     if (!this.timelines.has(key)) {
       this.timelines.set(key, api.getBuildTimeline(run.id, timelineId).catch(() => undefined));
     }
@@ -674,7 +679,7 @@ class LibraryProvider {
             pipelineName || approval.instructions || `Approval ${String(approval.id).slice(0, 8)}`,
             vscode.TreeItemCollapsibleState.None
           );
-          item.id = `approval-${approval.id}`;
+          item.id = `approval-${workspaceFolder?.uri.toString() || ""}-${approval.id}`;
           item.contextValue = "azurePipelineApproval";
           item.description = [
             buildId ? `Run #${buildId}` : "Pending",
@@ -736,7 +741,7 @@ class LibraryProvider {
             group.name,
             vscode.TreeItemCollapsibleState.Collapsed
           );
-          item.id = `variable-group-${group.id}`;
+          item.id = `variable-group-${workspaceFolder?.uri.toString() || ""}-${group.id}`;
           item.contextValue = "azureVariableGroup";
           item.description = group.type === "AzureKeyVault" ? "Key Vault" : `${Object.keys(group.variables || {}).length} variables`;
           item.iconPath = new vscode.ThemeIcon(group.type === "AzureKeyVault" ? "key" : "library");
@@ -754,7 +759,7 @@ class LibraryProvider {
             definition.name || `Pipeline ${definition.id}`,
             vscode.TreeItemCollapsibleState.Collapsed
           );
-          item.id = `pipeline-definition-${definition.id}`;
+          item.id = `pipeline-definition-${workspaceFolder?.uri.toString() || ""}-${definition.id}`;
           item.contextValue = "azurePipelineDefinitionVariables";
           item.description = `Definition ${definition.id}`;
           item.iconPath = new vscode.ThemeIcon("symbol-namespace");
@@ -768,7 +773,7 @@ class LibraryProvider {
         return Object.entries(definition.variables || {}).map(([name, variable]) => {
           const isSecret = Boolean(variable.isSecret);
           const item = new vscode.TreeItem(name, vscode.TreeItemCollapsibleState.None);
-          item.id = `pipeline-variable-${definition.id}-${name}`;
+          item.id = `pipeline-variable-${workspaceFolder?.uri.toString() || ""}-${definition.id}-${name}`;
           item.contextValue = isSecret
             ? "azurePipelineVariableSecret"
             : "azurePipelineVariable";
@@ -788,7 +793,7 @@ class LibraryProvider {
         return Object.entries(element.group.variables || {}).map(([name, variable]) => {
           const isSecret = Boolean(variable.isSecret);
           const item = new vscode.TreeItem(name, vscode.TreeItemCollapsibleState.None);
-          item.id = `variable-${element.group.id}-${name}`;
+          item.id = `variable-${workspaceFolder?.uri.toString() || ""}-${element.group.id}-${name}`;
           item.contextValue = isSecret ? "azureLibraryVariableSecret" : "azureLibraryVariable";
           item.description = isSecret ? "Secret (value hidden)" : (variable.value ?? "");
           item.tooltip = isSecret ? "Secret value is hidden by Azure DevOps" : `Value: ${variable.value ?? ""}`;

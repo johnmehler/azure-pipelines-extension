@@ -501,9 +501,24 @@ function activate(context) {
     return values;
   };
 
-  const getPinned = () => context.workspaceState.get("azure-pipelines.pinned", []);
-  const getPinnedIds = () => new Set(getPinned().map(item => Number(item.id)));
   const getWorkspaceFolders = () => vscode.workspace.workspaceFolders || [];
+  const getPinned = () => context.workspaceState.get("azure-pipelines.pinned", []);
+  const getPinnedWorkspaceFolder = pipeline => {
+    const folders = getWorkspaceFolders();
+    if (pipeline.workspaceFolder) {
+      return folders.find(folder => folder.uri.toString() === pipeline.workspaceFolder);
+    }
+    return folders.length === 1 ? folders[0] : undefined;
+  };
+  const pinnedPipelineMatches = (item, pipeline) =>
+    Number(item.id) === Number(pipeline.id) &&
+    (item.workspaceFolder || "") === (pipeline.workspaceFolder?.uri.toString() || "");
+  const getPinnedIds = workspaceFolder => {
+    const folderUri = workspaceFolder?.uri.toString();
+    return new Set(getPinned()
+      .filter(item => item.workspaceFolder === folderUri || (!item.workspaceFolder && !folderUri))
+      .map(item => Number(item.id)));
+  };
   const pipelinesProvider = new PipelineProvider({
     getApi,
     getPinnedIds,
@@ -520,8 +535,17 @@ function activate(context) {
   });
   const libraryProvider = new LibraryProvider({getApi, getWorkspaceFolders});
   const variableNamesCache = new Map();
-  let taskCatalogCache = {connection: "", expires: 0, definitions: []};
-  let taskCatalogRequest;
+  const getCatalogConnectionKey = values => {
+    const connection = String(values.serverUrl || values.organization || "")
+      .trim()
+      .replace(/\/+$/, "")
+      .toLowerCase();
+    return connection
+      ? JSON.stringify([connection, String(values.project || "").trim().toLowerCase()])
+      : "";
+  };
+  const taskCatalogCache = new Map();
+  const taskCatalogRequests = new Map();
   const templateContentCache = new Map();
   context.subscriptions.push(libraryProvider.onDidChangeTreeData(() => {
     variableNamesCache.clear();
@@ -555,58 +579,57 @@ function activate(context) {
   };
   const getTaskDefinitions = async folder => {
     const values = await getConnectionValues(folder);
-    const connection = (values.serverUrl || values.organization || "").toLowerCase();
+    const connection = getCatalogConnectionKey(values);
     if (!connection) {
       return [];
     }
-    if (taskCatalogCache.connection === connection && taskCatalogCache.expires > Date.now()) {
-      return taskCatalogCache.definitions;
+    const cached = taskCatalogCache.get(connection);
+    if (cached?.expires > Date.now()) {
+      return cached.definitions;
     }
-    if (taskCatalogRequest?.connection === connection) {
-      return taskCatalogRequest.promise;
+    if (taskCatalogRequests.has(connection)) {
+      return taskCatalogRequests.get(connection);
     }
     const promise = (async () => {
       try {
         const api = await getApi(false, folder);
         if (!api) {
-          taskCatalogCache = {
-            connection,
+          taskCatalogCache.set(connection, {
             expires: Date.now() + 60 * 1000,
             definitions: []
-          };
+          });
           return [];
         }
         const definitions = responseItems(await api.listTaskDefinitions(), "tasks");
-        taskCatalogCache = {
-          connection,
+        taskCatalogCache.set(connection, {
           expires: Date.now() + 60 * 60 * 1000,
           definitions
-        };
+        });
         return definitions;
       } catch {
-        taskCatalogCache = {
-          connection,
+        taskCatalogCache.set(connection, {
           expires: Date.now() + 60 * 1000,
           definitions: []
-        };
+        });
         return [];
       }
     })();
-    taskCatalogRequest = {connection, promise};
+    taskCatalogRequests.set(connection, promise);
     try {
       return await promise;
     } finally {
-      if (taskCatalogRequest?.promise === promise) {
-        taskCatalogRequest = undefined;
+      if (taskCatalogRequests.get(connection) === promise) {
+        taskCatalogRequests.delete(connection);
       }
     }
   };
-  let yamlCatalogCache = {connection: "", expires: 0, pools: [], environments: []};
+  const yamlCatalogCache = new Map();
   const getYamlCatalogs = async folder => {
     const values = await getConnectionValues(folder);
-    const connection = `${values.serverUrl || values.organization}/${values.project}`;
-    if (yamlCatalogCache.connection === connection && yamlCatalogCache.expires > Date.now()) {
-      return yamlCatalogCache;
+    const connection = getCatalogConnectionKey(values);
+    const cached = yamlCatalogCache.get(connection);
+    if (cached?.expires > Date.now()) {
+      return cached;
     }
     const api = await getApi(false, folder);
     if (!api) {
@@ -626,7 +649,7 @@ function activate(context) {
         ? responseItems(environmentResult.value, "environments")
         : []
     };
-    yamlCatalogCache = result;
+    yamlCatalogCache.set(connection, result);
     return result;
   };
   const getTemplateText = async (document, referencePath) => {
@@ -1026,21 +1049,30 @@ function activate(context) {
       statusBar.hide();
       return;
     }
-    const api = await getApi(false);
-    const statuses = api
-      ? await Promise.all(pinned.map(async pipeline => {
-          try {
-            const response = await api.listRuns(pipeline.id);
-            const latest = responseItems(response, "runs")[0];
-            return {
-              name: pipeline.name,
-              status: latest ? (latest.result || latest.state || "unknown") : "No runs"
-            };
-          } catch {
-            return {name: pipeline.name, status: "Unavailable"};
-          }
-        }))
-      : [];
+    const folders = getWorkspaceFolders();
+    const statuses = await Promise.all(pinned.map(async pipeline => {
+      const workspaceFolder = getPinnedWorkspaceFolder(pipeline);
+      if (
+        (!pipeline.workspaceFolder && folders.length > 1) ||
+        (pipeline.workspaceFolder && !workspaceFolder)
+      ) {
+        return {name: pipeline.name, status: "Workspace unavailable"};
+      }
+      const api = await getApi(false, workspaceFolder);
+      if (!api) {
+        return {name: pipeline.name, status: "Unavailable"};
+      }
+      try {
+        const response = await api.listRuns(pipeline.id);
+        const latest = responseItems(response, "runs")[0];
+        return {
+          name: pipeline.name,
+          status: latest ? (latest.result || latest.state || "unknown") : "No runs"
+        };
+      } catch {
+        return {name: pipeline.name, status: "Unavailable"};
+      }
+    }));
     const first = statuses[0];
     statusBar.text = first
       ? `$(rocket) ${first.name}: ${first.status}`
@@ -1170,37 +1202,58 @@ function activate(context) {
     }
   });
   register("azure-pipelines.showPinned", async () => {
-    const api = await getApi(true);
-    if (!api) {
-      return;
-    }
     const pinned = getPinned();
     if (!pinned.length) {
       void vscode.window.showInformationMessage("No pinned pipelines.");
       return;
     }
+    const folders = getWorkspaceFolders();
     const choices = await Promise.all(pinned.map(async pipeline => {
+      const workspaceFolder = getPinnedWorkspaceFolder(pipeline);
+      if (
+        (!pipeline.workspaceFolder && folders.length > 1) ||
+        (pipeline.workspaceFolder && !workspaceFolder)
+      ) {
+        return {
+          label: pipeline.name,
+          description: "Workspace unavailable; pin this pipeline again",
+          pipeline
+        };
+      }
+      const api = await getApi(false, workspaceFolder);
+      if (!api) {
+        return {
+          label: pipeline.name,
+          description: "Azure DevOps connection unavailable",
+          pipeline
+        };
+      }
       try {
         const runs = await api.listRuns(pipeline.id);
-        const latest = (runs.runs || runs.value || [])[0];
+        const latest = responseItems(runs, "runs")[0];
         return {
           label: pipeline.name,
           description: latest ? `#${latest.id} ${latest.result || latest.state}` : "No runs",
           pipeline,
-          run: latest
+          run: latest,
+          api
         };
       } catch {
-        return {label: pipeline.name, description: "Unable to load latest status", pipeline};
+        return {
+          label: pipeline.name,
+          description: "Unable to load latest status",
+          pipeline,
+          api
+        };
       }
     }));
     const selected = await vscode.window.showQuickPick(choices, {placeHolder: "Pinned pipelines"});
-    if (selected?.run) {
-      const values = await getConnectionValues();
+    if (selected?.run && selected.api) {
       await vscode.env.openExternal(vscode.Uri.parse(webRunUrl(
-        values.organization,
-        values.project,
+        selected.api.organization,
+        selected.api.project,
         selected.run,
-        values.serverUrl
+        selected.api.serverUrl
       )));
     }
   });
@@ -1844,10 +1897,15 @@ function activate(context) {
       return;
     }
     const pinned = getPinned();
-    if (!pinned.some(item => Number(item.id) === Number(pipeline.id))) {
+    if (!pinned.some(item => pinnedPipelineMatches(item, pipeline))) {
+      const workspaceFolder = pipeline.workspaceFolder?.uri.toString();
       await context.workspaceState.update("azure-pipelines.pinned", [
         ...pinned,
-        {id: pipeline.id, name: pipeline.name}
+        {
+          id: pipeline.id,
+          name: pipeline.name,
+          ...(workspaceFolder ? {workspaceFolder} : {})
+        }
       ]);
       refreshAll();
     }
@@ -1859,7 +1917,7 @@ function activate(context) {
       return;
     }
     await context.workspaceState.update("azure-pipelines.pinned", getPinned().filter(
-      item => Number(item.id) !== Number(pipeline.id)
+      item => !pinnedPipelineMatches(item, pipeline)
     ));
     refreshAll();
   });

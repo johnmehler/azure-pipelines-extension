@@ -7,7 +7,7 @@ function parseAzureDevOpsRemote(remote) {
 
   const value = remote.trim();
   let host;
-  let origin;
+  let serverHost;
   let path;
   try {
     const normalized = /^[^/]+@[^:]+:/.test(value)
@@ -15,7 +15,7 @@ function parseAzureDevOpsRemote(remote) {
       : value;
     const url = new URL(normalized);
     host = url.hostname.toLowerCase();
-    origin = url.origin;
+    serverHost = url.host;
     path = decodeURIComponent(url.pathname).split("/").filter(Boolean);
   } catch {
     return undefined;
@@ -55,7 +55,7 @@ function parseAzureDevOpsRemote(remote) {
       const collectionPath = path.slice(0, gitIndex - 1)
         .map(segment => encodeURIComponent(segment))
         .join("/");
-      serverUrl = `${origin}/${collectionPath}`;
+      serverUrl = `https://${serverHost}/${collectionPath}`;
     }
   }
 

@@ -2,6 +2,7 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const {AzureDevOpsApi} = require("../src/api");
 const {parseAzureDevOpsRemote, parseGitRemotes} = require("../src/git");
 
 test("Azure DevOps HTTPS remotes discover organization, project, and repository", () => {
@@ -36,6 +37,28 @@ test("Azure DevOps Server collection remotes are recognized", () => {
       serverUrl: "https://ado.example.test/tfs/DefaultCollection"
     }
   );
+});
+
+test("Azure DevOps Server HTTP and SSH remotes produce HTTPS collection URLs", () => {
+  const expected = {
+    organization: "DefaultCollection",
+    project: "Build",
+    repository: "agent",
+    serverUrl: "https://ado.example.test/tfs/DefaultCollection"
+  };
+  assert.deepEqual(
+    parseAzureDevOpsRemote("http://ado.example.test/tfs/DefaultCollection/Build/_git/agent"),
+    expected
+  );
+  assert.deepEqual(
+    parseAzureDevOpsRemote("git@ado.example.test:tfs/DefaultCollection/Build/_git/agent"),
+    expected
+  );
+  assert.doesNotThrow(() => new AzureDevOpsApi({
+    ...expected,
+    token: "test-pat",
+    fetchImpl: async () => ({ok: true, text: async () => "{}"})
+  }));
 });
 
 test("unrelated remotes are ignored and duplicate projects are collapsed", () => {

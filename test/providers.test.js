@@ -138,6 +138,51 @@ test("Library section IDs are unique across workspace folders", () => {
   assert.notEqual(frontend.id, backend.id);
 });
 
+test("Library resource and variable IDs are unique across workspace folders", async () => {
+  const folders = [
+    {name: "frontend", uri: {toString: () => "file:///frontend"}},
+    {name: "backend", uri: {toString: () => "file:///backend"}}
+  ];
+  const api = {
+    getBuildDefinition: async id => ({
+      id,
+      variables: {SHARED: {value: "value"}}
+    })
+  };
+  const provider = new LibraryProvider({getApi: async () => api});
+  const children = await Promise.all(folders.map(async workspaceFolder => {
+    const variableGroups = provider.groupNode("Variable Groups", "variableGroups", [{
+      id: 7,
+      name: "Shared",
+      variables: {SHARED: {value: "value"}}
+    }], undefined, workspaceFolder);
+    const definitions = provider.groupNode("Pipeline Variables", "pipelineDefinitions", [{
+      id: 7,
+      name: "Shared"
+    }], undefined, workspaceFolder);
+    const approvals = provider.groupNode("Pending Approvals", "approvals", [{
+      id: "approval-7",
+      pipeline: {name: "Shared"}
+    }], undefined, workspaceFolder);
+    const [group] = await provider.getChildren(variableGroups);
+    const [definition] = await provider.getChildren(definitions);
+    const [approval] = await provider.getChildren(approvals);
+    const [libraryVariable] = await provider.getChildren(group);
+    const [pipelineVariable] = await provider.getChildren(definition);
+    return {group, definition, approval, libraryVariable, pipelineVariable};
+  }));
+
+  for (const key of [
+    "group",
+    "definition",
+    "approval",
+    "libraryVariable",
+    "pipelineVariable"
+  ]) {
+    assert.notEqual(children[0][key].id, children[1][key].id, `${key} IDs should be folder-scoped`);
+  }
+});
+
 test("branch run caches remain isolated when multiple roots are expanded", async () => {
   const folders = [
     {name: "frontend", uri: {toString: () => "file:///frontend", fsPath: "/frontend"}},
@@ -172,6 +217,35 @@ test("branch run caches remain isolated when multiple roots are expanded", async
 
   assert.equal(frontendRun.run.id, 41);
   assert.equal(backendRun.run.id, 42);
+});
+
+test("timeline cache keys distinguish on-premises servers", async () => {
+  const provider = createProvider({});
+  const calls = [];
+  const run = {id: 12};
+  const firstApi = {
+    organization: "",
+    project: "Build",
+    serverUrl: "https://first.example.test/collection",
+    getBuildTimeline: async () => {
+      calls.push("first");
+      return {records: []};
+    }
+  };
+  const secondApi = {
+    organization: "",
+    project: "Build",
+    serverUrl: "https://second.example.test/collection",
+    getBuildTimeline: async () => {
+      calls.push("second");
+      return {records: []};
+    }
+  };
+
+  await provider.getTimeline(firstApi, run);
+  await provider.getTimeline(secondApi, run);
+
+  assert.deepEqual(calls, ["first", "second"]);
 });
 
 test("stage and job timeline items expose stage retry context", async () => {
