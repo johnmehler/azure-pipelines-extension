@@ -11,6 +11,10 @@ test("full Azure DevOps Services project URLs provide organization and project",
     {organization: "contoso", project: "My Project"}
   );
   assert.deepEqual(
+    parseAzureDevOpsProjectUrl("dev.azure.com/contoso/Platform/_build"),
+    {organization: "contoso", project: "Platform"}
+  );
+  assert.deepEqual(
     parseAzureDevOpsProjectUrl("https://contoso.visualstudio.com/DefaultCollection/Platform/_build"),
     {organization: "contoso", project: "Platform"}
   );

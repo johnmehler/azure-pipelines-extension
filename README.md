@@ -29,7 +29,7 @@ VS Code installs the Microsoft Azure Pipelines and Red Hat YAML language extensi
 
 1. Open a workspace containing your Azure Pipelines repository.
 2. Open the Azure Pipelines Activity Bar view and choose **Configure Azure DevOps Connection**, or run that command from the Command Palette.
-3. Choose Azure DevOps Services or Azure DevOps Server. For Services, paste the full project URL (for example, `https://dev.azure.com/{organization}/{project}`); for Server, enter the collection URL and project. Microsoft account sign-in is available for Services. If your organization's access policy blocks it, choose a PAT instead. PATs are stored in VS Code SecretStorage, not settings or source files.
+3. Choose Azure DevOps Services or Azure DevOps Server. For Services, paste the project URL (for example, `dev.azure.com/{organization}/{project}`; `https://` is optional); for Server, enter the collection URL and project. Microsoft account sign-in is available for Services. If your organization's access policy blocks it, choose a PAT instead. PATs are stored in VS Code SecretStorage, not settings or source files.
 4. Grant the PAT the Azure DevOps permissions required by the features you plan to use. Build read/execute permissions cover browsing, runs, retries, and artifact downloads; Build definition edit permission is needed for pipeline variables; Environment and Variable Groups manage permissions are needed for library management; pipeline resource approval permission is needed to approve or reject gates.
 
 You can change the organization and project later in VS Code settings. Reconfigure the connection to replace the PAT.

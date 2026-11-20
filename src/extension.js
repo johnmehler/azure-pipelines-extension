@@ -304,7 +304,7 @@ function activate(context) {
       } else {
         const projectUrl = await vscode.window.showInputBox({
           title: "Azure DevOps connection",
-          prompt: "Paste the full project URL, for example https://dev.azure.com/organization/project",
+          prompt: "Paste the project URL, for example dev.azure.com/organization/project (https:// is optional)",
           value: values.organization && values.project
             ? `https://dev.azure.com/${encodeURIComponent(values.organization)}/${encodeURIComponent(values.project)}`
             : "",
@@ -312,7 +312,7 @@ function activate(context) {
           validateInput(value) {
             return parseAzureDevOpsProjectUrl(value)
               ? undefined
-              : "Enter a full HTTPS project URL from dev.azure.com or an organization.visualstudio.com site.";
+              : "Enter dev.azure.com/{organization}/{project} or {organization}.visualstudio.com/{project}; https:// is optional.";
           }
         });
         if (projectUrl === undefined) {
@@ -389,11 +389,33 @@ function activate(context) {
       if (authMethod === "pat") {
         await secretStorage.store(PAT_SECRET_KEY, token);
       }
-      await vscode.window.showInformationMessage(
-        `${targetType.label} connection saved using ${
-          authMethod === "pat" ? "a personal access token" : selectedAuth.label
-        }.`
-      );
+      try {
+        const api = new AzureDevOpsApi({
+          organization,
+          project: project.trim(),
+          serverUrl: serverUrl || undefined,
+          apiVersion: settings.get("apiVersion", "7.1"),
+          token,
+          authType: authMethod === "microsoft" && !serverUrl ? "bearer" : "pat",
+          workspaceFolder: targetFolder
+        });
+        const pipelines = responseItems(await api.listPipelines(), "pipelines");
+        if (pipelines.length) {
+          await vscode.window.showInformationMessage(
+            `Connection saved using ${
+              authMethod === "pat" ? "a personal access token" : selectedAuth.label
+            }. Found ${pipelines.length} pipeline${pipelines.length === 1 ? "" : "s"}.`
+          );
+        } else {
+          await vscode.window.showWarningMessage(
+            "Connection succeeded, but no pipelines were returned. Check the project URL and the account's Build (Read) permission."
+          );
+        }
+      } catch (error) {
+        await vscode.window.showErrorMessage(
+          `Connection was saved, but pipelines could not be loaded: ${error.message}`
+        );
+      }
       refreshAll();
       return targetFolder || true;
     })();

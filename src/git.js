@@ -8,7 +8,8 @@ function parseAzureDevOpsProjectUrl(projectUrl) {
   let url;
   let path;
   try {
-    url = new URL(projectUrl.trim());
+    const input = projectUrl.trim();
+    url = new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(input) ? input : `https://${input}`);
     path = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
   } catch {
     return undefined;
