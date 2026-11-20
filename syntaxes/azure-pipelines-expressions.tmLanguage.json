@@ -1,0 +1,105 @@
+{
+  "scopeName": "source.azure-pipelines.expressions",
+  "injectionSelector": "L:source.yaml",
+  "patterns": [
+    {
+      "name": "meta.expression.azure-pipelines.template",
+      "begin": "\\$\\{\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.expression.begin.azure-pipelines"
+        }
+      },
+      "end": "\\}\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.expression.end.azure-pipelines"
+        }
+      },
+      "patterns": [
+        {
+          "name": "support.function.azure-pipelines",
+          "match": "\\b(and|coalesce|contains|containsValue|convertToJson|counter|endsWith|eq|format|ge|gt|iif|in|join|le|length|lower|lt|ne|not|notIn|or|replace|split|startsWith|upper|succeeded|failed|canceled|succeededOrFailed|always)(?=\\s*\\()"
+        },
+        {
+          "name": "variable.language.azure-pipelines",
+          "match": "\\b(variables|parameters|dependencies|stageDependencies|resources)\\b"
+        },
+        {
+          "name": "keyword.operator.azure-pipelines",
+          "match": "\\b(and|or|not|in|notIn|eq|ne|gt|ge|lt|le)\\b"
+        },
+        {
+          "name": "string.quoted.single.azure-pipelines",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.azure-pipelines",
+              "match": "''"
+            }
+          ]
+        },
+        {
+          "name": "constant.language.azure-pipelines",
+          "match": "\\b(true|false|null)\\b"
+        },
+        {
+          "name": "constant.numeric.azure-pipelines",
+          "match": "\\b\\d+(\\.\\d+)?\\b"
+        }
+      ]
+    },
+    {
+      "name": "meta.expression.azure-pipelines.runtime",
+      "begin": "\\$\\[",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.expression.begin.azure-pipelines"
+        }
+      },
+      "end": "\\]",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.expression.end.azure-pipelines"
+        }
+      },
+      "patterns": [
+        {
+          "name": "support.function.azure-pipelines",
+          "match": "\\b(and|coalesce|contains|containsValue|convertToJson|counter|endsWith|eq|format|ge|gt|iif|in|join|le|length|lower|lt|ne|not|notIn|or|replace|split|startsWith|upper|succeeded|failed|canceled|succeededOrFailed|always)(?=\\s*\\()"
+        },
+        {
+          "name": "variable.language.azure-pipelines",
+          "match": "\\b(variables|dependencies|stageDependencies)\\b"
+        },
+        {
+          "name": "string.quoted.single.azure-pipelines",
+          "begin": "'",
+          "end": "'"
+        }
+      ]
+    },
+    {
+      "name": "meta.expression.azure-pipelines.macro",
+      "begin": "\\$\\(",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.expression.begin.azure-pipelines"
+        }
+      },
+      "end": "\\)",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.expression.end.azure-pipelines"
+        }
+      },
+      "patterns": [
+        {
+          "name": "variable.other.azure-pipelines",
+          "match": "[A-Za-z_][A-Za-z0-9_.-]*"
+        }
+      ]
+    }
+  ]
+}

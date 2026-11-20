@@ -1,0 +1,361 @@
+{
+  "name": "azure-devops-pipelines",
+  "displayName": "Azure DevOps Pipelines",
+  "description": "Browse, run, and inspect Azure DevOps pipelines from VS Code.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other",
+    "Programming Languages"
+  ],
+  "main": "./src/extension.js",
+  "activationEvents": [
+    "onView:azure-pipelines.pipelines",
+    "onView:azure-pipelines.currentBranch",
+    "onView:azure-pipelines.settings",
+    "onLanguage:yaml",
+    "onLanguage:azure-pipelines"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check src/api.js && node --check src/helpers.js && node --check src/yamlSupport.js && node --check src/providers.js && node --check src/extension.js",
+    "vscode:prepublish": "npm run check && npm test"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "azure-pipelines",
+          "title": "Azure Pipelines",
+          "icon": "media/azure-pipelines.svg"
+        }
+      ]
+    },
+    "views": {
+      "azure-pipelines": [
+        {
+          "id": "azure-pipelines.pipelines",
+          "name": "Pipelines"
+        },
+        {
+          "id": "azure-pipelines.currentBranch",
+          "name": "Current Branch"
+        },
+        {
+          "id": "azure-pipelines.settings",
+          "name": "Library"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "azure-pipelines.configure",
+        "title": "Configure Azure DevOps Connection",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.disconnect",
+        "title": "Disconnect Azure DevOps",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.refreshSchema",
+        "title": "Download Organization YAML Schema",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.showPinned",
+        "title": "Show Pinned Pipelines",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.refresh",
+        "title": "Refresh",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.openRun",
+        "title": "Open Run in Browser",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.openDefinition",
+        "title": "Open Pipeline YAML",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.openEnvironment",
+        "title": "Open Environment in Browser",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.addEnvironment",
+        "title": "Create Environment",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.updateEnvironment",
+        "title": "Edit Environment",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.deleteEnvironment",
+        "title": "Delete Environment",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.addVariableGroup",
+        "title": "Create Variable Group",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.updateVariableGroup",
+        "title": "Rename Variable Group",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.deleteVariableGroup",
+        "title": "Delete Variable Group",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.queuePipeline",
+        "title": "Run Pipeline",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.cancelRun",
+        "title": "Cancel Run",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.retryRun",
+        "title": "Retry Run",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.openLogs",
+        "title": "Open Logs",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.openLogsInBrowser",
+        "title": "Open Step in Browser",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.pinPipeline",
+        "title": "Pin Pipeline",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.unpinPipeline",
+        "title": "Unpin Pipeline",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.addVariable",
+        "title": "Add Library Variable",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.updateVariable",
+        "title": "Update Library Variable",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.deleteVariable",
+        "title": "Delete Library Variable",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.copyVariable",
+        "title": "Copy Variable Name",
+        "category": "Azure Pipelines"
+      },
+      {
+        "command": "azure-pipelines.copyVariableValue",
+        "title": "Copy Variable Value",
+        "category": "Azure Pipelines"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "azure-pipelines.refresh",
+          "group": "navigation",
+          "when": "view == azure-pipelines.pipelines || view == azure-pipelines.currentBranch || view == azure-pipelines.settings"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "azure-pipelines.queuePipeline",
+          "when": "viewItem == azurePipeline || viewItem == azurePipelinePinned"
+        },
+        {
+          "command": "azure-pipelines.openDefinition",
+          "when": "viewItem == azurePipeline || viewItem == azurePipelinePinned"
+        },
+        {
+          "command": "azure-pipelines.openEnvironment",
+          "when": "viewItem == azureEnvironment"
+        },
+        {
+          "command": "azure-pipelines.addEnvironment",
+          "when": "viewItem == azureEnvironments"
+        },
+        {
+          "command": "azure-pipelines.updateEnvironment",
+          "when": "viewItem == azureEnvironment"
+        },
+        {
+          "command": "azure-pipelines.deleteEnvironment",
+          "when": "viewItem == azureEnvironment"
+        },
+        {
+          "command": "azure-pipelines.pinPipeline",
+          "when": "viewItem == azurePipeline"
+        },
+        {
+          "command": "azure-pipelines.unpinPipeline",
+          "when": "viewItem == azurePipelinePinned"
+        },
+        {
+          "command": "azure-pipelines.openRun",
+          "when": "viewItem =~ /azurePipelineRun/"
+        },
+        {
+          "command": "azure-pipelines.cancelRun",
+          "when": "viewItem == azurePipelineRunActive"
+        },
+        {
+          "command": "azure-pipelines.retryRun",
+          "when": "viewItem == azurePipelineRunCompleted"
+        },
+        {
+          "command": "azure-pipelines.openLogs",
+          "when": "viewItem == azurePipelineLog"
+        },
+        {
+          "command": "azure-pipelines.openLogsInBrowser",
+          "when": "viewItem == azurePipelineLog"
+        },
+        {
+          "command": "azure-pipelines.addVariable",
+          "when": "viewItem == azureVariableGroup"
+        },
+        {
+          "command": "azure-pipelines.updateVariableGroup",
+          "when": "viewItem == azureVariableGroup"
+        },
+        {
+          "command": "azure-pipelines.deleteVariableGroup",
+          "when": "viewItem == azureVariableGroup"
+        },
+        {
+          "command": "azure-pipelines.addVariableGroup",
+          "when": "viewItem == azureVariableGroups"
+        },
+        {
+          "command": "azure-pipelines.updateVariable",
+          "when": "viewItem =~ /azureLibraryVariable/"
+        },
+        {
+          "command": "azure-pipelines.deleteVariable",
+          "when": "viewItem =~ /azureLibraryVariable/"
+        },
+        {
+          "command": "azure-pipelines.copyVariable",
+          "when": "viewItem =~ /azureLibraryVariable/"
+        },
+        {
+          "command": "azure-pipelines.copyVariableValue",
+          "when": "viewItem == azureLibraryVariable"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Azure Pipelines",
+      "properties": {
+        "azure-pipelines.organization": {
+          "type": "string",
+          "default": "",
+          "description": "Azure DevOps organization name (the segment in https://dev.azure.com/{organization})."
+        },
+        "azure-pipelines.project": {
+          "type": "string",
+          "default": "",
+          "description": "Azure DevOps project name or ID."
+        },
+        "azure-pipelines.authMethod": {
+          "type": "string",
+          "enum": [
+            "microsoft",
+            "pat"
+          ],
+          "default": "pat",
+          "description": "Authentication method for Azure DevOps REST API requests."
+        },
+        "azure-pipelines.refreshInterval": {
+          "type": "number",
+          "default": 60,
+          "minimum": 0,
+          "description": "Automatic refresh interval in seconds (minimum 30). Set to 0 to disable polling."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "json.schemas": [
+        {
+          "url": "https://raw.githubusercontent.com/Microsoft/azure-pipelines-task-lib/master/tasks.schema.json",
+          "fileMatch": [
+            "task.json",
+            "**/task.json"
+          ]
+        }
+      ],
+      "yaml.schemas": {
+        "https://raw.githubusercontent.com/microsoft/azure-pipelines-vscode/main/service-schema.json": [
+          "azure-pipelines.yml",
+          "azure-pipelines.yaml",
+          "**/azure-pipelines.yml",
+          "**/azure-pipelines.yaml",
+          ".azure-pipelines/**/*.yml",
+          ".azure-pipelines/**/*.yaml",
+          "**/.azure-pipelines/**/*.yml",
+          "**/.azure-pipelines/**/*.yaml",
+          "**/azure-pipelines/**/*.yml",
+          "**/azure-pipelines/**/*.yaml",
+          "**/.pipelines/**/*.yml",
+          "**/.pipelines/**/*.yaml",
+          "vsts-ci.yml",
+          "vsts-ci.yaml",
+          ".vsts-ci.yml",
+          ".vsts-ci.yaml",
+          "**/*.azure-pipelines.yml",
+          "**/*.azure-pipelines.yaml"
+        ]
+      }
+    },
+    "grammars": [
+      {
+        "scopeName": "source.azure-pipelines.expressions",
+        "path": "./syntaxes/azure-pipelines-expressions.tmLanguage.json",
+        "injectTo": [
+          "source.yaml"
+        ]
+      }
+    ]
+  },
+  "extensionDependencies": [
+    "redhat.vscode-yaml",
+    "ms-azure-devops.azure-pipelines"
+  ],
+  "dependencies": {
+    "yaml": "^2.9.1"
+  }
+}
