@@ -376,11 +376,9 @@ function activate(context) {
         token = enteredPat.trim() || savedPat;
       }
 
-      const target = targetFolder
-        ? vscode.ConfigurationTarget.WorkspaceFolder
-        : vscode.workspace.workspaceFolders?.length
-          ? vscode.ConfigurationTarget.Workspace
-          : vscode.ConfigurationTarget.Global;
+      const target = vscode.workspace.workspaceFolders?.length
+        ? vscode.ConfigurationTarget.Workspace
+        : vscode.ConfigurationTarget.Global;
       const settings = vscode.workspace.getConfiguration("azure-pipelines", targetFolder?.uri);
       await settings.update("organization", organization, target);
       await settings.update("project", project.trim(), target);
@@ -1092,7 +1090,48 @@ function activate(context) {
     branchProvider.refresh();
     libraryProvider.refresh();
     void refreshPinnedStatus();
+    void refreshConnectionStatus();
   };
+
+  const connectionStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 41);
+  connectionStatus.name = "Azure DevOps Connection";
+  connectionStatus.command = "azure-pipelines.switchConnection";
+  let connectionStatusRequest = 0;
+  const refreshConnectionStatus = async () => {
+    const request = ++connectionStatusRequest;
+    const values = await getConnectionValues();
+    if (request !== connectionStatusRequest) {
+      return;
+    }
+
+    const hasTarget = Boolean((values.organization || values.serverUrl) && values.project);
+    if (!hasTarget) {
+      const multipleFolders = (vscode.workspace.workspaceFolders || []).length > 1;
+      connectionStatus.text = multipleFolders
+        ? "$(organization) Select Azure DevOps project"
+        : "$(plug) Connect Azure DevOps";
+      connectionStatus.tooltip = multipleFolders
+        ? "Open a file in the workspace to show its Azure DevOps project, or click to configure a connection."
+        : "No Azure DevOps connection configured. Click to connect or switch organizations and projects.";
+    } else {
+      const organization = values.organization || values.serverUrl;
+      const state = values.token ? "Signed in" : "Sign-in required";
+      connectionStatus.text = `${values.token ? "$(organization)" : "$(sign-in)"} ${organization} / ${values.project}`;
+      connectionStatus.tooltip = [
+        `Azure DevOps: ${state}`,
+        `${values.serverUrl ? "Server" : "Organization"}: ${organization}`,
+        `Project: ${values.project}`,
+        "Click to connect or switch organizations and projects."
+      ].join("\n");
+    }
+    connectionStatus.show();
+  };
+  context.subscriptions.push(
+    connectionStatus,
+    vscode.window.onDidChangeActiveTextEditor(() => void refreshConnectionStatus()),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => void refreshConnectionStatus())
+  );
+  void refreshConnectionStatus();
 
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 40);
   statusBar.command = "azure-pipelines.showPinned";
@@ -1143,6 +1182,7 @@ function activate(context) {
   };
 
   register("azure-pipelines.configure", configureConnection);
+  register("azure-pipelines.switchConnection", configureConnection);
   register("azure-pipelines.disconnect", async () => {
     const folders = vscode.workspace.workspaceFolders || [];
     let folder = activeWorkspaceFolder();
@@ -2532,6 +2572,9 @@ function activate(context) {
     vscode.workspace.onDidChangeConfiguration(event => {
       if (event.affectsConfiguration("azure-pipelines.refreshInterval")) {
         configureRefreshTimer();
+      }
+      if (event.affectsConfiguration("azure-pipelines")) {
+        void refreshConnectionStatus();
       }
     }),
     {dispose: () => clearInterval(refreshTimer)}

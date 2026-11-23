@@ -210,18 +210,16 @@ test("variable-group updates target the requested group ID", async () => {
   const requests = [];
   const api = createApi(async (url, options) => {
     requests.push({url: new URL(url), options});
-    return {
-      ok: true,
-      text: async () => requests.length === 1
-        ? '{"id":"project-guid","name":"My Project"}'
-        : "{}"
-    };
+    return {ok: true, text: async () => "{}"};
   });
 
   await api.updateVariableGroup({id: 17, name: "Updated", type: "Vsts", variables: {}});
-  assert.match(requests[1].url.pathname, /variablegroups\/17$/);
-  assert.equal(requests[1].options.method, "PUT");
-  assert.equal(Object.hasOwn(JSON.parse(requests[1].options.body), "id"), false);
+  assert.equal(
+    requests[0].url.pathname,
+    "/contoso/My%20Project/_apis/distributedtask/variablegroups/17"
+  );
+  assert.equal(requests[0].options.method, "PUT");
+  assert.equal(Object.hasOwn(JSON.parse(requests[0].options.body), "id"), false);
 });
 
 test("timeline requests can select a previous attempt timeline", async () => {
@@ -235,17 +233,41 @@ test("timeline requests can select a previous attempt timeline", async () => {
   assert.match(requestUrl.pathname, /builds\/12\/timeline\/timeline-guid$/);
 });
 
-test("variable-group requests resolve a project name to its ID", async () => {
+test("variable-group requests use the project-scoped API route", async () => {
   const requests = [];
   const api = createApi(async (url, options) => {
     requests.push({url: new URL(url), options});
-    const body = requests.length === 1 ? '{"id":"project-guid"}' : '{"value":[]}';
-    return {ok: true, text: async () => body};
+    return {ok: true, text: async () => '{"value":[]}'};
   });
 
   await api.listVariableGroups();
-  assert.match(requests[0].url.pathname, /_apis\/projects\/My%20Project$/);
-  assert.equal(requests[1].url.searchParams.get("projectIds"), "project-guid");
+  assert.equal(
+    requests[0].url.pathname,
+    "/contoso/My%20Project/_apis/distributedtask/variablegroups"
+  );
+  assert.equal(requests[0].url.searchParams.has("projectIds"), false);
+  assert.equal(requests[0].url.searchParams.get("api-version"), "7.1");
+});
+
+test("variable-group reads and deletes use project-scoped routes", async () => {
+  const requests = [];
+  const api = createApi(async (url, options) => {
+    requests.push({url: new URL(url), options});
+    return {ok: true, text: async () => "{}"};
+  });
+
+  await api.getVariableGroup(17);
+  await api.deleteVariableGroup(17);
+  assert.equal(
+    requests[0].url.pathname,
+    "/contoso/My%20Project/_apis/distributedtask/variablegroups/17"
+  );
+  assert.equal(requests[0].options.method, "GET");
+  assert.equal(
+    requests[1].url.pathname,
+    "/contoso/My%20Project/_apis/distributedtask/variablegroups/17"
+  );
+  assert.equal(requests[1].options.method, "DELETE");
 });
 
 test("signed log content is downloaded without forwarding the PAT", async () => {

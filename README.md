@@ -34,6 +34,7 @@ VS Code installs the Microsoft Azure Pipelines and Red Hat YAML language extensi
 
 You can change the organization and project later in VS Code settings. Reconfigure the connection to replace the PAT.
 Use **Disconnect Azure DevOps** to clear the configured organization, project, and stored PAT.
+The status bar shows the active organization/project (or prompts you to connect); click it, or run **Switch Azure DevOps Connection**, to sign in or switch targets.
 
 ## Development
 

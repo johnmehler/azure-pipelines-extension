@@ -41,7 +41,6 @@ class AzureDevOpsApi {
     this.workspaceFolder = workspaceFolder;
     this.fetch = fetchImpl;
     this.projectDetails = undefined;
-    this.resolvedProjectId = undefined;
   }
 
   projectUrl(route, query = {}) {
@@ -191,14 +190,8 @@ class AzureDevOpsApi {
       this.projectDetails = await this.request(
         this.organizationUrl(`projects/${encodeURIComponent(this.project)}`)
       );
-      this.resolvedProjectId = this.projectDetails.id;
     }
     return this.projectDetails;
-  }
-
-  async getProjectId() {
-    await this.getProject();
-    return this.resolvedProjectId;
   }
 
   getPipeline(pipelineId) {
@@ -479,34 +472,25 @@ class AzureDevOpsApi {
   }
 
   async deleteVariableGroup(groupId) {
-    const projectId = await this.getProjectId();
-    return this.request(this.organizationUrl(
-      `distributedtask/variablegroups/${encodeURIComponent(groupId)}`,
-      {projectIds: projectId}
+    return this.request(this.projectUrl(
+      `distributedtask/variablegroups/${encodeURIComponent(groupId)}`
     ), {method: "DELETE"});
   }
 
   async listVariableGroups() {
-    const projectId = await this.getProjectId();
-    return this.request(this.organizationUrl("distributedtask/variablegroups", {
-      projectIds: projectId
-    }));
+    return this.request(this.projectUrl("distributedtask/variablegroups"));
   }
 
   async getVariableGroup(groupId) {
-    const projectId = await this.getProjectId();
-    return this.request(this.organizationUrl(
-      `distributedtask/variablegroups/${encodeURIComponent(groupId)}`,
-      {projectIds: projectId}
+    return this.request(this.projectUrl(
+      `distributedtask/variablegroups/${encodeURIComponent(groupId)}`
     ));
   }
 
   async updateVariableGroup(group) {
-    const projectId = await this.getProjectId();
     const {id, ...body} = group;
-    return this.request(this.organizationUrl(
-      `distributedtask/variablegroups/${encodeURIComponent(id)}`,
-      {projectIds: projectId}
+    return this.request(this.projectUrl(
+      `distributedtask/variablegroups/${encodeURIComponent(id)}`
     ), {
       method: "PUT",
       body
