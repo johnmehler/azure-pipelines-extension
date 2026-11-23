@@ -3,8 +3,12 @@
   "displayName": "Pipeline Manager for Azure DevOps",
   "description": "Browse, run, and inspect Azure DevOps pipelines from VS Code.",
   "icon": "media/icon.png",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "JohnMehler",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/johnmehler/azure-pipelines-extension.git"
+  },
   "license": "MIT",
   "engines": {
     "vscode": "^1.96.0"
