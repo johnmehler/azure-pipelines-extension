@@ -9,6 +9,7 @@ const {
   getExpressionHover,
   getAzureYamlCompletions,
   getPipelineResourceDiagnostics,
+  addVariableGroupReference,
   getScheduleDiagnostics,
   getScheduleInlayHints,
   getTemplateReferenceAt,
@@ -26,6 +27,7 @@ const {
   isAzurePipelineDocument,
   isTaskInputCompletionPosition,
   parameterPromptKind,
+  parsePipelineYaml,
   parseTemplateReference,
   resolveTemplatePaths,
   typedParameterValue
@@ -389,4 +391,47 @@ test("reports function arity and statically invalid parameter references", () =>
   assert.ok(messages.some(message => /eq.*expects 2 arguments/.test(message)));
   assert.ok(messages.some(message => /Unknown pipeline parameter "unknown"/.test(message)));
   assert.ok(messages.some(message => /succeeded.*expects 0 arguments/.test(message)));
+});
+
+test("adds a variable group to an Azure Pipelines YAML file", () => {
+  const result = addVariableGroupReference("trigger: none\n", "Shared");
+  assert.equal(result.added, true);
+  assert.deepEqual(parsePipelineYaml(result.text).variables, [{group: "Shared"}]);
+});
+
+test("appends variable groups and avoids duplicate references", () => {
+  const source = [
+    "variables:",
+    "- name: configuration",
+    "  value: Release"
+  ].join("\n");
+  const result = addVariableGroupReference(source, "Shared");
+  assert.equal(result.added, true);
+  assert.deepEqual(parsePipelineYaml(result.text).variables, [
+    {name: "configuration", value: "Release"},
+    {group: "Shared"}
+  ]);
+
+  const duplicate = addVariableGroupReference(result.text, "shared");
+  assert.equal(duplicate.added, false);
+  assert.equal(duplicate.text, result.text);
+});
+
+test("converts a variables mapping to a list when adding a variable group", () => {
+  const result = addVariableGroupReference("variables:\n  configuration: Release\n", "Shared");
+  assert.deepEqual(parsePipelineYaml(result.text).variables, [
+    {name: "configuration", value: "Release"},
+    {group: "Shared"}
+  ]);
+});
+
+test("does not rewrite unsupported or invalid pipeline YAML", () => {
+  assert.throws(
+    () => addVariableGroupReference("variables: [\n", "Shared"),
+    /Could not parse pipeline YAML/
+  );
+  assert.throws(
+    () => addVariableGroupReference("variables:\n  settings:\n    mode: release\n", "Shared"),
+    /non-scalar value/
+  );
 });

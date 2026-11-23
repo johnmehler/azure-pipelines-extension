@@ -98,6 +98,11 @@
         "category": "Azure Pipelines"
       },
       {
+        "command": "azure-pipelines.addVariableGroupToPipeline",
+        "title": "Add Variable Group",
+        "category": "Azure Pipelines"
+      },
+      {
         "command": "azure-pipelines.openEnvironment",
         "title": "Open Environment in Browser",
         "category": "Azure Pipelines"
@@ -289,6 +294,10 @@
         },
         {
           "command": "azure-pipelines.openDefinition",
+          "when": "viewItem == azurePipeline || viewItem == azurePipelinePinned"
+        },
+        {
+          "command": "azure-pipelines.addVariableGroupToPipeline",
           "when": "viewItem == azurePipeline || viewItem == azurePipelinePinned"
         },
         {

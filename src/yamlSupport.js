@@ -90,6 +90,49 @@ function parsePipelineYaml(text) {
   }
 }
 
+function addVariableGroupReference(text, groupName) {
+  const document = YAML.parseDocument(text, {uniqueKeys: false});
+  if (document.errors.length) {
+    throw new Error(`Could not parse pipeline YAML: ${document.errors[0].message}`);
+  }
+  if (document.contents && !YAML.isMap(document.contents)) {
+    throw new Error("Pipeline YAML must have a mapping at its root to add a variable group.");
+  }
+
+  const variables = document.get("variables", true);
+  if (!variables) {
+    document.set("variables", [{group: groupName}]);
+    return {text: document.toString(), added: true};
+  }
+
+  if (YAML.isSeq(variables)) {
+    const alreadyAdded = variables.items.some(item => {
+      const reference = item && typeof item.get === "function" ? item.get("group") : undefined;
+      return typeof reference === "string" && reference.toLowerCase() === groupName.toLowerCase();
+    });
+    if (alreadyAdded) {
+      return {text, added: false};
+    }
+    variables.add(document.createNode({group: groupName}));
+    return {text: document.toString(), added: true};
+  }
+
+  if (YAML.isMap(variables)) {
+    const sequence = document.createNode([]);
+    for (const pair of variables.items) {
+      if (!YAML.isScalar(pair.value)) {
+        throw new Error("Cannot add a variable group because the pipeline's variables mapping contains a non-scalar value.");
+      }
+      sequence.add(document.createNode({name: pair.key, value: pair.value}));
+    }
+    sequence.add(document.createNode({group: groupName}));
+    document.set("variables", sequence);
+    return {text: document.toString(), added: true};
+  }
+
+  throw new Error("Cannot add a variable group because the pipeline's variables section is not a mapping or list.");
+}
+
 function getTemplateReferenceAt(text, offset) {
   let document;
   try {
@@ -1882,6 +1925,7 @@ module.exports = {
   getParameterDefinitions,
   parameterPromptKind,
   parsePipelineYaml,
+  addVariableGroupReference,
   pipelineNames,
   resolveTemplatePaths,
   typedParameterValue

@@ -27,6 +27,7 @@ const {
   getTemplateParameterTemplateAt,
   getTemplateReferenceAt,
   getTemplateReferences,
+  addVariableGroupReference,
   getTaskInputCompletions,
   getTaskInputDiagnostics,
   getParameterDefinitions,
@@ -1518,6 +1519,68 @@ function activate(context) {
       }
     } catch (error) {
       void vscode.window.showErrorMessage(`Could not open pipeline YAML: ${error.message}`);
+    }
+  });
+
+  register("azure-pipelines.addVariableGroupToPipeline", async argument => {
+    const pipeline = getPipelineArgument(argument);
+    if (!pipeline?.id) {
+      return;
+    }
+    const api = await getApi(true, pipeline.workspaceFolder);
+    if (!api) {
+      return;
+    }
+
+    try {
+      const groups = responseItems(await api.listVariableGroups(), "variableGroups")
+        .filter(group => group?.name);
+      if (!groups.length) {
+        void vscode.window.showInformationMessage("No variable groups are available in this project.");
+        return;
+      }
+      const selected = await vscode.window.showQuickPick(groups.map(group => ({
+        label: group.name,
+        description: group.type === "AzureKeyVault"
+          ? "Key Vault"
+          : `${Object.keys(group.variables || {}).length} variables`,
+        group
+      })), {placeHolder: `Choose a variable group for ${pipeline.name || "this pipeline"}`});
+      if (!selected) {
+        return;
+      }
+
+      const {uri} = await findPipelineYaml(api, pipeline);
+      if (!uri) {
+        void vscode.window.showInformationMessage(
+          `Pipeline YAML was not found in this workspace${pipeline.workspaceFolder ? " folder" : ""}.`
+        );
+        return;
+      }
+
+      const document = await vscode.workspace.openTextDocument(uri);
+      const result = addVariableGroupReference(document.getText(), selected.group.name);
+      if (!result.added) {
+        void vscode.window.showInformationMessage(
+          `Variable group "${selected.group.name}" is already referenced by "${pipeline.name}".`
+        );
+        return;
+      }
+
+      const editor = await vscode.window.showTextDocument(document);
+      const range = new vscode.Range(
+        document.positionAt(0),
+        document.positionAt(document.getText().length)
+      );
+      const applied = await editor.edit(editBuilder => editBuilder.replace(range, result.text));
+      if (!applied) {
+        throw new Error("The pipeline YAML could not be updated.");
+      }
+      void vscode.window.showInformationMessage(
+        `Added variable group "${selected.group.name}" to "${pipeline.name}". Save the YAML file to keep the change.`
+      );
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not add variable group to pipeline: ${error.message}`);
     }
   });
 
