@@ -61,52 +61,38 @@ function activeWorkspaceFolder() {
   return uri ? vscode.workspace.getWorkspaceFolder(uri) : undefined;
 }
 
-async function currentGitBranch(folder) {
-  const folders = vscode.workspace.workspaceFolders || [];
-  const target = folder || activeWorkspaceFolder() || (folders.length === 1 ? folders[0] : undefined);
-  if (!target) {
+function normalizeRefName(ref) {
+  const raw = String(ref || "").trim();
+  if (!raw) {
     return undefined;
   }
+  return raw.startsWith("refs/") ? raw : `refs/heads/${raw}`;
+}
 
-  let repositoryRoot;
-  try {
-    const gitExtension = vscode.extensions.getExtension("vscode.git");
-    if (gitExtension) {
-      const git = gitExtension.isActive
-        ? gitExtension.exports
-        : await gitExtension.activate();
-      const api = git.getAPI(1);
-      const root = target.uri.fsPath.toLowerCase();
-      const repositories = api.repositories.map(item => ({
-        item,
-        root: item.rootUri.fsPath.toLowerCase()
-      }));
-      const ancestors = repositories.filter(repository =>
-        root === repository.root || root.startsWith(`${repository.root}${path.sep.toLowerCase()}`)
-      ).sort((left, right) => right.root.length - left.root.length);
-      const descendants = repositories.filter(repository =>
-        repository.root.startsWith(`${root}${path.sep.toLowerCase()}`)
-      );
-      const repository = ancestors[0]?.item || (descendants.length === 1 ? descendants[0].item : undefined);
-      if (repository?.state.HEAD?.name) {
-        return repository.state.HEAD.name;
+async function pipelineDefaultRef(api, pipeline) {
+  const candidates = [pipeline];
+  if (pipeline?.id) {
+    for (const method of ["getPipeline", "getBuildDefinition"]) {
+      if (typeof api[method] !== "function") {
+        continue;
       }
-      repositoryRoot = repository?.rootUri.fsPath;
+      try {
+        candidates.push(await api[method](pipeline.id));
+      } catch {
+        // Try the next endpoint before requiring the user to enter a branch.
+      }
     }
-  } catch {
-    // Fall back to Git CLI when the built-in Git extension is unavailable.
   }
-
-  try {
-    const {stdout} = await execFileAsync("git", ["branch", "--show-current"], {
-      cwd: repositoryRoot || target.uri.fsPath,
-      windowsHide: true,
-      timeout: 3000
-    });
-    return stdout.trim() || undefined;
-  } catch {
-    return undefined;
+  for (const candidate of candidates) {
+    const configured = normalizeRefName(
+      candidate?.repository?.defaultBranch ||
+      candidate?.configuration?.repository?.defaultBranch
+    );
+    if (configured) {
+      return configured;
+    }
   }
+  return undefined;
 }
 
 function activate(context) {
@@ -1596,10 +1582,14 @@ function activate(context) {
         return;
       }
     }
+    const defaultBranch = await pipelineDefaultRef(api, pipeline);
     const branch = await vscode.window.showInputBox({
       title: `Run ${pipeline.name}`,
-      prompt: "Branch or ref to run",
-      value: await currentGitBranch(pipeline.workspaceFolder) || "main",
+      prompt: defaultBranch
+        ? "Branch or ref to run"
+        : "Could not determine the pipeline's configured branch; enter the branch or ref to run",
+      value: defaultBranch || "",
+      placeHolder: "refs/heads/<branch>",
       ignoreFocusOut: true
     });
     if (!branch?.trim()) {
