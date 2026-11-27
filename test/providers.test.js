@@ -359,3 +359,41 @@ test("Library lists agent pools and agents with their status", async () => {
   assert.equal(agent.label, "agent-01");
   assert.equal(agent.description, "online");
 });
+
+test("current-branch view shows an information node when no builds match the branch", async () => {
+  const api = {
+    listPipelines: async () => ({value: [{id: 4, name: "CI"}]}),
+    listBuildsForBranch: async () => ({value: []})
+  };
+  const provider = new PipelineProvider({
+    getApi: async () => api,
+    getPinnedIds: () => new Set(),
+    currentBranch: true,
+    getBranch: async () => "feature/empty"
+  });
+
+  const [item] = await provider.getChildren();
+  assert.equal(item.label, "No runs on current branch");
+  assert.match(item.description, /feature\/empty/);
+});
+
+test("getTimeline does not cache active runs or failed timeline requests", async () => {
+  let calls = 0;
+  const api = {
+    organization: "contoso",
+    project: "Platform",
+    getBuildTimeline: async () => {
+      calls += 1;
+      return calls === 1 ? undefined : {records: []};
+    }
+  };
+  const provider = createProvider(api);
+
+  await provider.getTimeline(api, {id: 1, state: "completed"});
+  await provider.getTimeline(api, {id: 1, state: "completed"});
+  assert.equal(calls, 2, "Failed timeline should not be cached");
+
+  await provider.getTimeline(api, {id: 2, state: "inProgress"});
+  await provider.getTimeline(api, {id: 2, state: "inProgress"});
+  assert.equal(calls, 4, "Active run timeline should not be cached");
+});

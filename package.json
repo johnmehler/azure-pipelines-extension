@@ -269,6 +269,128 @@
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "azure-pipelines.openRun",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.addVariableGroupToPipeline",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.openEnvironment",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.updateEnvironment",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.deleteEnvironment",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.updateVariableGroup",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.deleteVariableGroup",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.togglePipelineQueue",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.cancelRun",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.deleteRun",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.retryRun",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.retryStage",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.retryJob",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.openLogs",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.openLogsInBrowser",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.downloadArtifact",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.approveApproval",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.rejectApproval",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.pinPipeline",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.unpinPipeline",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.addVariable",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.updateVariable",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.deleteVariable",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.copyVariable",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.copyVariableValue",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.addPipelineVariable",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.updatePipelineVariable",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.deletePipelineVariable",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.deleteSecureFile",
+          "when": "false"
+        },
+        {
+          "command": "azure-pipelines.deleteServiceConnection",
+          "when": "false"
+        }
+      ],
       "view/title": [
         {
           "command": "azure-pipelines.refresh",

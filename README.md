@@ -25,7 +25,7 @@ See `PARITY.md` for the Azure equivalent and the remaining platform-specific gap
 
 ## Setup
 
-VS Code installs the Microsoft Azure Pipelines and Red Hat YAML language extensions as dependencies.
+VS Code installs the Red Hat YAML language extension as a dependency; this extension provides built-in Azure Pipelines YAML, task, template, and expression support.
 
 1. Open a workspace containing your Azure Pipelines repository.
 2. Open the Azure Pipelines Activity Bar view and choose **Configure Azure DevOps Connection**, or run that command from the Command Palette.
